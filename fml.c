@@ -286,24 +286,11 @@ typedef enum {
 } AstKind;
 
 typedef struct Ast Ast;
-typedef struct Asts Asts;
 
 typedef struct {
 	const unsigned char *name;
 	size_t len;
 } Identifier;
-
-typedef struct {
-	Identifier *names;
-	size_t len;
-	size_t capacity;
-} Identifiers;
-
-struct Asts {
-	Ast *asts;
-	size_t len;
-	size_t capacity;
-};
 
 struct Ast {
 	AstKind kind;
