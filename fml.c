@@ -70,7 +70,7 @@ typedef enum {
 	_(PRINT,         print,    NULL,      0,  0) \
 	_(OBJECT,        object,   NULL,      0,  0) \
 	_(EXTENDS,       NULL,     NULL,      0,  0) \
-	_(WHILE,         loop,    NULL,       0,  0) \
+	_(WHILE,         loop,     NULL,      0,  0) \
 	_(DO,            NULL,     NULL,      0,  0) \
 	_(FUNCTION,      function, NULL,      0,  0) \
 	_(ARRAY,         array,    NULL,      0,  0) \
@@ -230,7 +230,7 @@ err:
 		{ "end", TK_END },
 		{ "if", TK_IF },
 		{ "then", TK_THEN },
-		{ "do", TK_ELSE },
+		{ "else", TK_ELSE },
 		{ "let", TK_LET },
 		{ "null", TK_NULL },
 		{ "print", TK_PRINT },
@@ -299,7 +299,7 @@ struct Ast {
 		struct { int32_t value; } integer;
 
 		struct { Ast *size; Ast *initializer; } array;
-		struct { Ast *extends; Ast *members; size_t member_cnt; } object;
+		struct { Ast *extends; Ast **members; size_t member_cnt; } object;
 		struct { Identifier *name; Identifier **parameters; size_t parameter_cnt; Ast *body; } function;
 
 		struct { Identifier *name; Ast *value; } variable;
@@ -638,6 +638,7 @@ call(Parser *parser, Ast *left, int rbp)
 	case AST_VARIABLE_ACCESS: {
 		Identifier *name = left->variable_access.name;
 		Ast *ast = left;
+		ast->kind = AST_FUNCTION_CALL;
 		ast->function_call.name = name;
 		TRY(separated_list(parser, (void*(*)(Parser*))expression, (void***)&ast->function_call.arguments, &ast->function_call.argument_cnt, TK_COMMA, TK_RPAREN));
 		return ast;
@@ -646,6 +647,7 @@ call(Parser *parser, Ast *left, int rbp)
 		Ast *object = left->field_access.object;
 		Identifier *name = left->field_access.field;
 		Ast *ast = left;
+		ast->kind = AST_METHOD_CALL;
 		ast->method_call.object = object;
 		ast->method_call.name = name;
 		TRY(separated_list(parser, (void*(*)(Parser*))expression, (void***)&ast->method_call.arguments, &ast->method_call.argument_cnt, TK_COMMA, TK_RPAREN));
@@ -664,6 +666,7 @@ indexing(Parser *parser, Ast *left, int rbp)
 	TRY(eat(parser, TK_LBRACKET));
 	ast->index_access.object = left;
 	TRY(ast->index_access.index = expression_bp(parser, rbp));
+	TRY(eat(parser, TK_RBRACKET));
 	return ast;
 }
 
@@ -671,7 +674,7 @@ static Ast *
 field(Parser *parser, Ast *left, int rbp)
 {
 	(void) rbp;
-	Ast *ast = make_ast(AST_INDEX_ACCESS);
+	Ast *ast = make_ast(AST_FIELD_ACCESS);
 	TRY(eat(parser, TK_DOT));
 	ast->field_access.object = left;
 	TRY(ast->field_access.field = eat_identifier(parser));
@@ -682,11 +685,12 @@ static Ast *
 assign(Parser *parser, Ast *left, int rbp)
 {
 	(void) rbp;
-	TRY(eat(parser, TK_EQUAL));
+	TRY(eat(parser, TK_LARROW));
 	switch (left->kind) {
 	case AST_VARIABLE_ACCESS: {
 		Identifier *name = left->variable_access.name;
 		Ast *ast = left;
+		ast->kind = AST_VARIABLE_ASSIGNMENT;
 		ast->variable_assignment.name = name;
 		TRY(ast->variable_assignment.value = expression_bp(parser, rbp));
 		return ast;
@@ -695,6 +699,7 @@ assign(Parser *parser, Ast *left, int rbp)
 		Ast *object = left->field_access.object;
 		Identifier *field = left->field_access.field;
 		Ast *ast = left;
+		ast->kind = AST_FIELD_ASSIGNMENT;
 		ast->field_assignment.object = object;
 		ast->field_assignment.field = field;
 		TRY(ast->field_assignment.value = expression_bp(parser, rbp));
@@ -704,6 +709,7 @@ assign(Parser *parser, Ast *left, int rbp)
 		Ast *object = left->index_access.object;
 		Ast *index = left->index_access.index;
 		Ast *ast = left;
+		ast->kind = AST_INDEX_ASSIGNMENT;
 		ast->index_assignment.object = object;
 		ast->index_assignment.index = index;
 		TRY(ast->index_assignment.value = expression_bp(parser, rbp));
@@ -850,7 +856,7 @@ print_value(Value value)
 		printf("%s", value.boolean ? "true" : "false");
 		break;
 	case VK_INTEGER:
-		printf("%"PRIu32, value.integer);
+		printf("%"PRIi32, value.integer);
 		break;
 	case VK_ARRAY:
 		assert(false);
