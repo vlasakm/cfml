@@ -782,9 +782,15 @@ typedef enum {
 	VK_NULL,
 	VK_BOOLEAN,
 	VK_INTEGER,
-	VK_ARRAY,
-	VK_OBJECT,
+	VK_GCVALUE,
 } ValueKind;
+
+typedef enum {
+	GK_ARRAY,
+	GK_OBJECT,
+} GcValueKind;
+
+typedef struct GcValue GcValue;
 
 typedef struct Array Array;
 typedef struct Object Object;
@@ -794,12 +800,16 @@ typedef struct {
 	union {
 		bool boolean;
 		int32_t integer;
-		Array *array;
-		Object *object;
+		GcValue *gcvalue;
 	};
 } Value;
 
+struct GcValue {
+	GcValueKind kind;
+};
+
 struct Array {
+	GcValue gcvalue;
 	size_t length;
 	Value values[];
 };
@@ -811,6 +821,7 @@ typedef struct {
 
 
 struct Object {
+	GcValue gcvalue;
 	size_t length;
 	KeyValue key_values[];
 };
@@ -837,12 +848,37 @@ Value
 make_array(size_t length)
 {
 	Array *array = malloc(sizeof(*array) + length * sizeof(array->values[0]));
+	array->gcvalue = (GcValue) { .kind = GK_ARRAY };
 	array->length = length;
 
-	return (Value) {
-		.kind = VK_ARRAY,
-		.array = array,
-	};
+	return (Value) { .kind = VK_GCVALUE, .gcvalue = &array->gcvalue };
+}
+
+bool
+value_is_integer(Value value)
+{
+	return value.kind == VK_INTEGER;
+}
+
+int32_t
+value_as_integer(Value value)
+{
+	assert(value.kind == VK_INTEGER);
+	return value.integer;
+}
+
+bool
+value_is_array(Value value)
+{
+	return value.kind == VK_GCVALUE && value.gcvalue->kind == GK_ARRAY;
+}
+
+Array *
+value_as_array(Value value)
+{
+	assert(value.kind == VK_GCVALUE);
+	assert(value.gcvalue->kind == GK_ARRAY);
+	return (Array *) value.gcvalue;
 }
 
 void
@@ -858,9 +894,7 @@ print_value(Value value)
 	case VK_INTEGER:
 		printf("%"PRIi32, value.integer);
 		break;
-	case VK_ARRAY:
-		assert(false);
-	case VK_OBJECT:
+	case VK_GCVALUE:
 		assert(false);
 	}
 }
@@ -881,6 +915,65 @@ struct Environment {
 	Identifier *name;
 	Value value;
 };
+
+Value *
+array_index(Value array_value, Value index)
+{
+	assert(value_is_array(array_value));
+	Array *array = value_as_array(array_value);
+	if (!value_is_integer(index)) {
+		assert(false);
+	}
+	int32_t int_index = value_as_integer(index);
+	if (int_index < 0) {
+		assert(false);
+	}
+	return &array->values[int_index];
+}
+
+Value
+value_get_index(Value target, Value index)
+{
+	switch (target.kind) {
+	case VK_GCVALUE: {
+		switch (target.gcvalue->kind) {
+		case GK_ARRAY: {
+			Value *lvalue = array_index(target, index);
+			return *lvalue;
+		}
+		case GK_OBJECT: {
+			assert(false);
+		}
+		}
+		break;
+	}
+	default:
+		assert(false);
+	}
+	assert(false);
+}
+
+Value
+value_set_index(Value target, Value index, Value value)
+{
+	switch (target.kind) {
+	case VK_GCVALUE: {
+		switch (target.gcvalue->kind) {
+		case GK_ARRAY: {
+			Value *lvalue = array_index(target, index);
+			return *lvalue = value;
+		}
+		case GK_OBJECT: {
+			assert(false);
+		}
+		}
+		break;
+	}
+	default:
+		assert(false);
+	}
+	assert(false);
+}
 
 Environment *
 make_env(Environment *prev, Identifier *name, Value value)
@@ -928,11 +1021,12 @@ interpret(InterpreterState *is, Ast *ast)
 	case AST_ARRAY: {
 		Value size = interpret(is, ast->array.size);
 		assert(size.kind == VK_INTEGER && size.integer >= 0);
-		Value array = make_array(size.integer);
+		Value array_value = make_array(size.integer);
+		Array *array = value_as_array(array_value);
 		for (size_t i = 0; i < (size_t) size.integer; i++) {
-			array.array->values[i] = interpret(is, ast->array.initializer);
+			array->values[i] = interpret(is, ast->array.initializer);
 		}
-		return array;
+		return array_value;
 	}
 	case AST_OBJECT: {
 		break;
@@ -961,10 +1055,15 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 
 	case AST_INDEX_ACCESS: {
-		assert(false);
+		Value object = interpret(is, ast->index_access.object);
+		Value index = interpret(is, ast->index_access.index);
+		return value_get_index(object, index);
 	}
 	case AST_INDEX_ASSIGNMENT: {
-		assert(false);
+		Value object = interpret(is, ast->index_assignment.object);
+		Value index = interpret(is, ast->index_assignment.index);
+		Value value = interpret(is, ast->index_assignment.value);
+		return value_set_index(object, index, value);
 	}
 
 	case AST_FIELD_ACCESS: {
