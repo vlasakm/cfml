@@ -800,6 +800,8 @@ typedef enum {
 	VK_BOOLEAN,
 	VK_INTEGER,
 	VK_GCVALUE,
+
+	VK_FUNCTION,
 } ValueKind;
 
 typedef enum {
@@ -811,6 +813,7 @@ typedef struct GcValue GcValue;
 
 typedef struct Array Array;
 typedef struct Object Object;
+typedef struct Function Function;
 
 typedef struct {
 	ValueKind kind;
@@ -818,6 +821,7 @@ typedef struct {
 		bool boolean;
 		int32_t integer;
 		GcValue *gcvalue;
+		Ast *function;
 	};
 } Value;
 
@@ -834,13 +838,19 @@ struct Array {
 typedef struct {
 	Identifier *name;
 	Value value;
-} KeyValue;
+} Field;
 
 
 struct Object {
 	GcValue gcvalue;
-	size_t length;
-	KeyValue key_values[];
+	Value parent;
+	size_t field_cnt;
+	Field fields[];
+};
+
+struct Function {
+	GcValue gcvalue;
+	Ast *ast;
 };
 
 Value
@@ -871,6 +881,42 @@ make_array(size_t length)
 	return (Value) { .kind = VK_GCVALUE, .gcvalue = &array->gcvalue };
 }
 
+Value
+make_object(Value parent, size_t field_cnt)
+{
+	Object *object = malloc(sizeof(*object) + field_cnt * sizeof(object->fields[0]));
+	object->gcvalue = (GcValue) { .kind = GK_OBJECT };
+	object->parent = parent;
+	object->field_cnt = field_cnt;
+
+	return (Value) { .kind = VK_GCVALUE, .gcvalue = &object->gcvalue };
+}
+
+Value
+make_function(Ast *ast)
+{
+	return (Value) { .kind = VK_FUNCTION, .function = ast };
+}
+
+bool
+value_is_null(Value value)
+{
+	return value.kind == VK_NULL;
+}
+
+bool
+value_is_bool(Value value)
+{
+	return value.kind == VK_BOOLEAN;
+}
+
+bool
+value_as_bool(Value value)
+{
+	assert(value.kind == VK_BOOLEAN);
+	return value.boolean;
+}
+
 bool
 value_is_integer(Value value)
 {
@@ -898,8 +944,34 @@ value_as_array(Value value)
 	return (Array *) value.gcvalue;
 }
 
+bool
+value_is_object(Value value)
+{
+	return value.kind == VK_GCVALUE && value.gcvalue->kind == GK_OBJECT;
+}
+
+Object *
+value_as_object(Value value)
+{
+	assert(value.kind == VK_GCVALUE);
+	assert(value.gcvalue->kind == GK_OBJECT);
+	return (Object *) value.gcvalue;
+}
+
+bool
+value_is_function(Value value)
+{
+	return value.kind == VK_FUNCTION;
+}
+
+Ast *
+value_as_function(Value value)
+{
+	return value.function;
+}
+
 void
-print_value(Value value)
+value_print(Value value)
 {
 	switch (value.kind) {
 	case VK_NULL:
@@ -912,7 +984,45 @@ print_value(Value value)
 		printf("%"PRIi32, value.integer);
 		break;
 	case VK_GCVALUE:
-		assert(false);
+		switch (value.gcvalue->kind) {
+		case GK_ARRAY: {
+			printf("[");
+			Array *array = value_as_array(value);
+			for (size_t i = 0; i < array->length; i++) {
+				if (i != 0) {
+					printf(", ");
+				}
+				value_print(array->values[i]);
+			}
+			printf("]");
+			break;
+		}
+		case GK_OBJECT:
+			printf("object(");
+			Object *object = value_as_object(value);
+			Value parent = object->parent;
+			if (!value_is_null(parent)) {
+				printf("..=");
+				value_print(parent);
+				if (object->field_cnt > 0) {
+					printf(", ");
+				}
+			}
+			for (size_t i = 0; i < object->field_cnt; i++) {
+				if (i != 0) {
+					printf(", ");
+				}
+				Identifier *name = object->fields[i].name;
+				printf("%.*s=", (int)name->len, name->name);
+				value_print(object->fields[i].value);
+			}
+			printf(")");
+			break;
+		}
+		break;
+
+	case VK_FUNCTION:
+		printf("function %s", value_as_function(value)->function.name->name);
 	}
 }
 
@@ -933,19 +1043,26 @@ struct Environment {
 	Value value;
 };
 
-Value *
-array_index(Value array_value, Value index)
+size_t
+value_as_index(Value value)
 {
-	assert(value_is_array(array_value));
-	Array *array = value_as_array(array_value);
-	if (!value_is_integer(index)) {
+	if (!value_is_integer(value)) {
 		assert(false);
 	}
-	int32_t int_index = value_as_integer(index);
+	int32_t int_index = value_as_integer(value);
 	if (int_index < 0) {
 		assert(false);
 	}
-	return &array->values[int_index];
+	return (size_t) int_index;
+}
+
+Value *
+array_index(Value array_value, Value index_value)
+{
+	assert(value_is_array(array_value));
+	Array *array = value_as_array(array_value);
+	size_t index = value_as_index(index_value);
+	return &array->values[index];
 }
 
 Value
@@ -992,6 +1109,102 @@ value_set_index(Value target, Value index, Value value)
 	assert(false);
 }
 
+Value *
+object_field(Object *object, Identifier *name)
+{
+	for (size_t i = 0; i < object->field_cnt; i++) {
+		Identifier *field_name = object->fields[i].name;
+		if (field_name->len == name->len && memcmp(field_name->name, name->name, name->len) == 0) {
+			return &object->fields[i].value;
+		}
+	}
+	if (value_is_object(object->parent)) {
+		Object *parent = value_as_object(object->parent);
+		return object_field(parent, name);
+	}
+	return NULL;
+}
+
+Value
+value_call_method(Value target, Identifier *method, Value *arguments, size_t argument_cnt)
+{
+	const unsigned char *method_name = method->name;
+	size_t method_name_len = method->len;
+	#define METHOD(name) \
+			if (sizeof(name) - 1 == method_name_len && memcmp(name, method_name, method_name_len) == 0) /* body*/
+
+	METHOD("==") {
+		if (argument_cnt != 1) goto err;
+		if (target.kind != arguments[0].kind) return make_boolean(false);
+		switch (target.kind) {
+		case VK_NULL: return make_boolean(true);
+		case VK_BOOLEAN: return make_boolean(value_as_bool(target) == value_as_bool(arguments[0]));
+		case VK_INTEGER: return make_boolean(value_as_integer(target) == value_as_integer(arguments[0]));
+		default: goto err;
+		}
+	}
+	METHOD("!=") {
+		if (argument_cnt != 1) goto err;
+		if (target.kind != arguments[0].kind) return make_boolean(true);
+		switch (target.kind) {
+		case VK_NULL: return make_boolean(false);
+		case VK_BOOLEAN: return make_boolean(value_as_bool(target) != value_as_bool(arguments[0]));
+		case VK_INTEGER: return make_boolean(value_as_integer(target) != value_as_integer(arguments[0]));
+		default: goto err;
+		}
+	}
+
+	switch (target.kind) {
+	case VK_NULL:
+	case VK_BOOLEAN:
+		if (argument_cnt != 1) goto err;
+		if (arguments[0].kind != VK_BOOLEAN) goto err;
+		#define LOG_OP(op) return make_boolean(value_as_bool(target) op value_as_bool(arguments[0]))
+		METHOD("&") LOG_OP(&&);
+		METHOD("|") LOG_OP(||);
+		#undef LOG_OP
+		break;
+	case VK_INTEGER:
+		if (argument_cnt != 1) goto err;
+		if (arguments[0].kind != VK_INTEGER) goto err;
+		#define OP(op) METHOD(#op) return make_integer(value_as_integer(target) op value_as_integer(arguments[0]))
+		#define REL_OP(op) METHOD(#op) return make_boolean(value_as_integer(target) op value_as_integer(arguments[0]))
+		OP(+);
+		OP(-);
+		OP(*);
+		OP(/);
+		OP(%);
+		REL_OP(<=);
+		REL_OP(<);
+		REL_OP(>=);
+		REL_OP(>);
+		#undef OP
+		#undef REL_OP
+		break;
+	case VK_GCVALUE:
+		switch (target.gcvalue->kind) {
+		case GK_ARRAY:
+			METHOD("get") {
+				if (argument_cnt != 1) goto err;
+				Value *lvalue = array_index(target, arguments[0]);
+				return *lvalue;
+			}
+			METHOD("set") {
+				if (argument_cnt != 2) goto err;
+				Value *lvalue = array_index(target, arguments[0]);
+				return *lvalue = arguments[1];
+			}
+		case GK_OBJECT:
+			break;
+		}
+	case VK_FUNCTION:
+		break;
+	}
+err:
+	// invalid method M called on object X
+	assert(false);
+}
+
 Environment *
 make_env(Environment *prev, Identifier *name, Value value)
 {
@@ -1002,18 +1215,35 @@ make_env(Environment *prev, Identifier *name, Value value)
 	return env;
 }
 
-Environment *
-env_lookup(Environment *env, Identifier *name)
+Value *
+env_lookup_raw(Environment *env, Identifier *name)
 {
 	if (!env) {
 		return NULL;
 	}
 	Identifier *env_name = env->name;
 	if (env_name->len == name->len && memcmp(env_name->name, name->name, name->len) == 0) {
-		return env;
+		return &env->value;
 	}
-	if (env->prev) {
-		return env_lookup(env->prev, name);
+	return env_lookup_raw(env->prev, name);
+}
+
+Value *
+env_lookup(Environment *env, Identifier *name)
+{
+	Value *lvalue = env_lookup_raw(env, name);
+	if (value_is_function(*lvalue)) {
+		return NULL;
+	}
+	return lvalue;
+}
+
+Ast *
+env_lookup_func(Environment *env, Identifier *name)
+{
+	Value *lvalue = env_lookup_raw(env, name);
+	if (value_is_function(*lvalue)) {
+		return value_as_function(*lvalue);
 	}
 	return NULL;
 }
@@ -1036,20 +1266,42 @@ interpret(InterpreterState *is, Ast *ast)
 		return make_integer(ast->integer.value);
 	}
 	case AST_ARRAY: {
-		Value size = interpret(is, ast->array.size);
-		assert(size.kind == VK_INTEGER && size.integer >= 0);
-		Value array_value = make_array(size.integer);
+		Value size_value = interpret(is, ast->array.size);
+		size_t size = value_as_index(size_value);
+		Value array_value = make_array(size);
 		Array *array = value_as_array(array_value);
-		for (size_t i = 0; i < (size_t) size.integer; i++) {
+		Environment *saved_env = is->env;
+		for (size_t i = 0; i < size; i++) {
 			array->values[i] = interpret(is, ast->array.initializer);
+			is->env = saved_env;
 		}
 		return array_value;
 	}
 	case AST_OBJECT: {
-		break;
+		Value parent = interpret(is, ast->object.extends);
+		Value object_value = make_object(parent, ast->object.member_cnt);
+		Object *object = value_as_object(object_value);
+		for (size_t i = 0; i < ast->object.member_cnt; i++) {
+			Ast *ast_member = ast->object.members[i];
+			switch (ast_member->kind) {
+			case AST_VARIABLE:
+				object->fields[i].name = ast_member->variable.name;
+				object->fields[i].value = interpret(is, ast_member->variable.value);
+				break;
+			case AST_FUNCTION:
+				object->fields[i].name = ast_member->function.name;
+				object->fields[i].value = make_function(ast_member);
+				break;
+			default:
+				assert(false);
+			}
+		}
+		return object_value;
 	}
 	case AST_FUNCTION: {
-		break;
+		Value function = make_function(ast);
+		is->env = make_env(is->env, ast->function.name, function);
+		return make_null();
 	}
 
 	case AST_VARIABLE: {
@@ -1059,16 +1311,15 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 
 	case AST_VARIABLE_ACCESS: {
-		Environment *env = env_lookup(is->env, ast->variable_access.name);
-		assert(env);
-		return env->value;
+		Value *lvalue = env_lookup(is->env, ast->variable_access.name);
+		assert(lvalue);
+		return *lvalue;
 	}
 	case AST_VARIABLE_ASSIGNMENT: {
 		Value value = interpret(is, ast->variable_assignment.value);
-		Environment *env = env_lookup(is->env, ast->variable_assignment.name);
-		assert(env);
-		env->value = value;
-		return value;
+		Value *lvalue = env_lookup(is->env, ast->variable_assignment.name);
+		assert(lvalue);
+		return *lvalue = value;
 	}
 
 	case AST_INDEX_ACCESS: {
@@ -1084,17 +1335,66 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 
 	case AST_FIELD_ACCESS: {
-		assert(false);
+		Value object_value = interpret(is, ast->field_access.object);
+		if (!value_is_object(object_value)) {
+			assert(false);
+		}
+		Object *object = value_as_object(object_value);
+		Value *lvalue = object_field(object, ast->field_access.field);
+		return *lvalue;
 	}
 	case AST_FIELD_ASSIGNMENT: {
-		assert(false);
+		Value object_value = interpret(is, ast->field_assignment.object);
+		Value value = interpret(is, ast->field_assignment.value);
+		if (!value_is_object(object_value)) {
+			assert(false);
+		}
+		Object *object = value_as_object(object_value);
+		Value *lvalue = object_field(object, ast->field_assignment.field);
+		return *lvalue = value;
 	}
 
 	case AST_FUNCTION_CALL: {
-		assert(false);
+		Ast *function = env_lookup_func(is->env, ast->function_call.name);
+		assert(function);
+		assert(function->function.parameter_cnt == ast->function_call.argument_cnt);
+		Environment *saved_env = is->env;
+		for (size_t i = 0; i < ast->function_call.argument_cnt; i++) {
+			Value value = interpret(is, ast->function_call.arguments[i]);
+			is->env = make_env(is->env, function->function.parameters[i], value);
+		}
+		Value return_value = interpret(is, function->function.body);
+		is->env = saved_env;
+		return return_value;
 	}
 	case AST_METHOD_CALL: {
-		assert(false);
+		Value object_value = interpret(is, ast->method_call.object);
+		if (value_is_object(object_value)) {
+			Object *object = value_as_object(object_value);
+			Value *method_value = object_field(object, ast->method_call.name);
+			assert(method_value);
+			assert(value_is_function(*method_value));
+
+			Ast *function = value_as_function(*method_value);
+			Environment *saved_env = is->env;
+			Environment *new_env = is->env;
+			for (size_t i = 0; i < ast->method_call.argument_cnt; i++) {
+				Value value = interpret(is, ast->method_call.arguments[i]);
+				new_env = make_env(new_env, function->function.parameters[i], value);
+			}
+			is->env = new_env;
+			Value return_value = interpret(is, function->function.body);
+			is->env = saved_env;
+			return return_value;
+		} else {
+			// abuse the fact that there may be at the most two args
+			Value arguments[2];
+			assert(ast->method_call.argument_cnt <= 2);
+			for (size_t i = 0; i < ast->method_call.argument_cnt; i++) {
+				arguments[i] = interpret(is, ast->method_call.arguments[i]);
+			}
+			return value_call_method(object_value, ast->method_call.name, &arguments[0], ast->method_call.argument_cnt);
+		}
 	}
 
 	case AST_IF: {
@@ -1122,23 +1422,24 @@ interpret(InterpreterState *is, Ast *ast)
 			if (in_escape) {
 				in_escape = false;
 				switch (c) {
-				case  'n': putchar('\n'); break;
-				case  't': putchar('\t'); break;
-				case  'r': putchar('\r'); break;
-				case  '~': putchar('~');  break;
-				case  '"': putchar('"');  break;
-				case '\\': putchar('\\'); break;
+				case  'n': c = '\n'; break;
+				case  't': c = '\t'; break;
+				case  'r': c = '\r'; break;
+				case  '~': c =  '~'; break;
+				case  '"': c =  '"'; break;
+				case '\\': c = '\\'; break;
 				default:
 					fprintf(stderr, "invalid string escape sequence: %c", c);
 					assert(false);
 				}
+				putchar(c);
 			} else {
 				switch (c) {
 				case '\\': in_escape = true; break;
 				case '~':
 					assert(arg_index < ast->print.argument_cnt);
 					Value value = interpret(is, ast->print.arguments[arg_index]);
-					print_value(value);
+					value_print(value);
 					arg_index += 1;
 					break;
 				default:
@@ -1150,12 +1451,12 @@ interpret(InterpreterState *is, Ast *ast)
 		return make_null();
 	}
 	case AST_BLOCK: {
-		Environment *env = is->env;
+		Environment *saved_env = is->env;
 		Value value = make_null();
 		for (size_t i = 0; i < ast->block.expression_cnt; i++) {
 			value = interpret(is, ast->block.expressions[i]);
 		}
-		is->env = env;
+		is->env = saved_env;
 		return value;
 	}
 	}
