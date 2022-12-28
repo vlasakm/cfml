@@ -11,6 +11,8 @@
 typedef struct {
 	const unsigned char *pos;
 	const unsigned char *end;
+	const unsigned char *line_start;
+	size_t line_num; // zero-based
 } Lexer;
 
 typedef enum {
@@ -97,6 +99,8 @@ typedef struct {
 	TokenKind kind;
 	const unsigned char *pos;
 	const unsigned char *end;
+	size_t line;
+	size_t col;
 } Token;
 
 Lexer
@@ -105,6 +109,8 @@ lex_init(const unsigned char *buf, size_t size)
 	return (Lexer) {
 		.pos = buf,
 		.end = buf + size,
+		.line_start = buf,
+		.line_num = 0,
 	};
 }
 
@@ -124,7 +130,8 @@ lex_next(Lexer *lexer, Token *token)
 		unsigned char c = *lexer->pos;
 		switch (state) {
 		case LS_START: switch (c) {
-			case '\n': case ' ': case '\t': start += 1; break;
+			case '\n': lexer->line_start = start += 1; lexer->line_num += 1; break;
+			case ' ': case '\t': start += 1; break;
 			case ALPHA: state = LS_IDENTIFIER; break;
 			case DIGIT: state = LS_NUMBER; break;
 			case '"': state = LS_STRING; start += 1; break;
@@ -170,14 +177,20 @@ lex_next(Lexer *lexer, Token *token)
 			default: tok = TK_SLASH; goto prev_done;
 		}; break;
 		case LS_LINE_COMMENT: switch (c) {
-			case '\n': state = LS_START; start = lexer->pos; break;
+			case '\n':
+				state = LS_START;
+				lexer->line_start = start = lexer->pos + 1;
+				lexer->line_num += 1;
+				break;
 		}; break;
 		case LS_BLOCK_COMMENT: switch (c) {
+			// TODO: handle \n
 			case '*': state = LS_BLOCK_COMMENT_STAR; break;
 		}; break;
 		case LS_BLOCK_COMMENT_STAR: switch (c) {
+			// TODO: handle \n
 			case '*': break;
-			case '/': state = LS_START; start = lexer->pos; break;
+			case '/': state = LS_START; start = lexer->pos + 1; break;
 			default: state = LS_BLOCK_COMMENT; break;
 		}; break;
 		case LS_MINUS: switch (c) {
@@ -221,7 +234,9 @@ done:
 prev_done:
 err:
 	length = lexer->pos - start + end_offset;
-	printf("TOK: %s %.*s\n", tok_repr[tok], (int) length, start);
+	size_t line = lexer->line_num + 1;
+	size_t col = start - lexer->line_start + 1;
+	printf("TOK[%2zu:%2zu]: %s %.*s\n", line, col, tok_repr[tok], (int) length, start);
 	static struct {
 		const char *str;
 		TokenKind tok;
@@ -254,6 +269,8 @@ err:
 	token->kind = tok;
 	token->pos = start;
 	token->end = lexer->pos + end_offset;
+	token->line = line;
+	token->col = col;
 }
 
 typedef enum {
