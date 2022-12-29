@@ -1004,20 +1004,24 @@ value_print(Value value)
 			printf("object(");
 			Object *object = value_as_object(value);
 			Value parent = object->parent;
+			bool prev = false;
 			if (!value_is_null(parent)) {
 				printf("..=");
 				value_print(parent);
-				if (object->field_cnt > 0) {
-					printf(", ");
-				}
+				prev = true;
 			}
 			for (size_t i = 0; i < object->field_cnt; i++) {
-				if (i != 0) {
+				if (value_is_function(object->fields[i].value)) {
+					continue;
+				}
+				if (prev) {
+					prev = false;
 					printf(", ");
 				}
 				Identifier *name = object->fields[i].name;
 				printf("%.*s=", (int)name->len, name->name);
 				value_print(object->fields[i].value);
+				prev = true;
 			}
 			printf(")");
 			break;
