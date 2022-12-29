@@ -236,7 +236,7 @@ err:
 	length = lexer->pos - start + end_offset;
 	size_t line = lexer->line_num + 1;
 	size_t col = start - lexer->line_start + 1;
-	printf("TOK[%2zu:%2zu]: %s %.*s\n", line, col, tok_repr[tok], (int) length, start);
+	fprintf(stderr, "TOK[%2zu:%2zu]: %s %.*s\n", line, col, tok_repr[tok], (int) length, start);
 	static struct {
 		const char *str;
 		TokenKind tok;
