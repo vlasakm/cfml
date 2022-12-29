@@ -681,10 +681,12 @@ call(Parser *parser, Ast *left, int rbp)
 static Ast *
 indexing(Parser *parser, Ast *left, int rbp)
 {
+	// rbp not used - delimited by TK_RBRACKET, not by precedence
+	(void) rbp;
 	Ast *ast = make_ast(AST_INDEX_ACCESS);
 	TRY(eat(parser, TK_LBRACKET));
 	ast->index_access.object = left;
-	TRY(ast->index_access.index = expression_bp(parser, rbp));
+	TRY(ast->index_access.index = expression(parser));
 	TRY(eat(parser, TK_RBRACKET));
 	return ast;
 }
@@ -703,7 +705,6 @@ field(Parser *parser, Ast *left, int rbp)
 static Ast *
 assign(Parser *parser, Ast *left, int rbp)
 {
-	(void) rbp;
 	TRY(eat(parser, TK_LARROW));
 	switch (left->kind) {
 	case AST_VARIABLE_ACCESS: {
