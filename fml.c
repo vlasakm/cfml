@@ -311,6 +311,12 @@ typedef struct {
 	size_t len;
 } Identifier;
 
+
+static Identifier THIS = {
+	.name = (const unsigned char*) "this",
+	.len = 4,
+};
+
 struct Ast {
 	AstKind kind;
 	union {
@@ -1121,6 +1127,9 @@ object_field(Object *object, Identifier *name)
 {
 	for (size_t i = 0; i < object->field_cnt; i++) {
 		Identifier *field_name = object->fields[i].name;
+		if (value_is_function(object->fields[i].value)) {
+			continue;
+		}
 		if (field_name->len == name->len && memcmp(field_name->name, name->name, name->len) == 0) {
 			return &object->fields[i].value;
 		}
@@ -1132,8 +1141,45 @@ object_field(Object *object, Identifier *name)
 	return NULL;
 }
 
+Ast *
+object_method(Object *object, Value *receiver, Identifier *name)
+{
+	for (size_t i = 0; i < object->field_cnt; i++) {
+		Identifier *field_name = object->fields[i].name;
+		if (!value_is_function(object->fields[i].value)) {
+			continue;
+		}
+		if (field_name->len == name->len && memcmp(field_name->name, name->name, name->len) == 0) {
+			// We found the method, set the receiver Object to the
+			// method's owner
+			receiver->gcvalue = &object->gcvalue;
+			return value_as_function(object->fields[i].value);
+		}
+	}
+	if (value_is_object(object->parent)) {
+		Object *parent = value_as_object(object->parent);
+		return object_method(parent, receiver, name);
+	}
+	// We did not find the method, but we have the eldest parent object on which
+	// we can call a primitive method, hopefully
+	*receiver = object->parent;
+	return NULL;
+}
+
+Ast *
+value_get_method(Value value, Value *receiver, Identifier *name)
+{
+	if (value_is_object(value)) {
+		Object *object = value_as_object(value);
+		Ast *function = object_method(object, receiver, name);
+
+		return function;
+	}
+	return NULL;
+}
+
 Value
-value_call_method(Value target, Identifier *method, Value *arguments, size_t argument_cnt)
+value_call_primitive_method(Value target, Identifier *method, Value *arguments, size_t argument_cnt)
 {
 	const unsigned char *method_name = method->name;
 	size_t method_name_len = method->len;
@@ -1375,21 +1421,16 @@ interpret(InterpreterState *is, Ast *ast)
 		return return_value;
 	}
 	case AST_METHOD_CALL: {
-		Value object_value = interpret(is, ast->method_call.object);
-		if (value_is_object(object_value)) {
-			Object *object = value_as_object(object_value);
-			Value *method_value = object_field(object, ast->method_call.name);
-			assert(method_value);
-			assert(value_is_function(*method_value));
-
-			Ast *function = value_as_function(*method_value);
+		Value object = interpret(is, ast->method_call.object);
+		Ast *function = value_get_method(object, &object, ast->method_call.name);
+		if (function) {
 			Environment *saved_env = is->env;
 			Environment *new_env = is->env;
 			for (size_t i = 0; i < ast->method_call.argument_cnt; i++) {
 				Value value = interpret(is, ast->method_call.arguments[i]);
 				new_env = make_env(new_env, function->function.parameters[i], value);
 			}
-			is->env = new_env;
+			is->env = make_env(new_env, &THIS, object);
 			Value return_value = interpret(is, function->function.body);
 			is->env = saved_env;
 			return return_value;
@@ -1400,7 +1441,7 @@ interpret(InterpreterState *is, Ast *ast)
 			for (size_t i = 0; i < ast->method_call.argument_cnt; i++) {
 				arguments[i] = interpret(is, ast->method_call.arguments[i]);
 			}
-			return value_call_method(object_value, ast->method_call.name, &arguments[0], ast->method_call.argument_cnt);
+			return value_call_primitive_method(object, ast->method_call.name, &arguments[0], ast->method_call.argument_cnt);
 		}
 	}
 
