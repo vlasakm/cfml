@@ -1285,7 +1285,7 @@ Value *
 env_lookup(Environment *env, Identifier *name)
 {
 	Value *lvalue = env_lookup_raw(env, name);
-	if (value_is_function(*lvalue)) {
+	if (lvalue && value_is_function(*lvalue)) {
 		return NULL;
 	}
 	return lvalue;
@@ -1295,7 +1295,7 @@ Ast *
 env_lookup_func(Environment *env, Identifier *name)
 {
 	Value *lvalue = env_lookup_raw(env, name);
-	if (value_is_function(*lvalue)) {
+	if (lvalue && value_is_function(*lvalue)) {
 		return value_as_function(*lvalue);
 	}
 	return NULL;
