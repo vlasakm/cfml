@@ -87,6 +87,8 @@ typedef enum {
 	#define TOK_ENUM(tok, nud, led, lbp, rbp) TK_##tok,
 	TOKENS(TOK_ENUM)
 	#undef TOK_ENUM
+	TK_OP_MIN = TK_BAR,
+	TK_OP_MAX = TK_PERCENT,
 } TokenKind;
 
 static const char *tok_repr[] = {
@@ -381,7 +383,7 @@ static Identifier *
 eat_identifier(Parser *parser)
 {
 	Token tok = discard(parser);
-	if (tok.kind != TK_IDENTIFIER) {
+	if (tok.kind != TK_IDENTIFIER && (tok.kind < TK_OP_MIN || tok.kind > TK_OP_MAX)) {
 		fprintf(stderr, "expected an identifier, found %s\n", tok_repr[tok.kind]);
 		return NULL;
 	}
