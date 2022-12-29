@@ -1465,6 +1465,10 @@ interpret(InterpreterState *is, Ast *ast)
 		size_t length = ast->print.format->len;
 		bool in_escape = false;
 		size_t arg_index = 0;
+		Value *arguments = calloc(ast->print.argument_cnt, sizeof(*arguments));
+		for (size_t i = 0; i < ast->print.argument_cnt; i++) {
+			arguments[i] = interpret(is, ast->print.arguments[i]);
+		}
 		for (size_t i = 0; i < length; i++) {
 			unsigned char c = format[i];
 			if (in_escape) {
@@ -1486,8 +1490,7 @@ interpret(InterpreterState *is, Ast *ast)
 				case '\\': in_escape = true; break;
 				case '~':
 					assert(arg_index < ast->print.argument_cnt);
-					Value value = interpret(is, ast->print.arguments[arg_index]);
-					value_print(value);
+					value_print(arguments[arg_index]);
 					arg_index += 1;
 					break;
 				default:
@@ -1495,6 +1498,7 @@ interpret(InterpreterState *is, Ast *ast)
 				}
 			}
 		}
+		free(arguments);
 		fflush(stdout);
 		return make_null();
 	}
