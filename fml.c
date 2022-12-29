@@ -821,10 +821,6 @@ typedef enum {
 
 typedef struct GcValue GcValue;
 
-typedef struct Array Array;
-typedef struct Object Object;
-typedef struct Function Function;
-
 typedef struct {
 	ValueKind kind;
 	union {
@@ -839,11 +835,11 @@ struct GcValue {
 	GcValueKind kind;
 };
 
-struct Array {
+typedef struct {
 	GcValue gcvalue;
 	size_t length;
 	Value values[];
-};
+} Array ;
 
 typedef struct {
 	Identifier *name;
@@ -851,17 +847,17 @@ typedef struct {
 } Field;
 
 
-struct Object {
+typedef struct {
 	GcValue gcvalue;
 	Value parent;
 	size_t field_cnt;
 	Field fields[];
-};
+} Object;
 
-struct Function {
+typedef struct {
 	GcValue gcvalue;
 	Ast *ast;
-};
+} Function;
 
 Value
 make_null(void)
