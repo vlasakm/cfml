@@ -1465,10 +1465,10 @@ interpret(InterpreterState *is, Ast *ast)
 
 int
 main(int argc, char **argv) {
-	if(argc != 2) {
+	if(argc != 3 || strcmp(argv[1], "run") != 0) {
 		return 1;
 	}
-	FILE *f = fopen(argv[1], "rb");
+	FILE *f = fopen(argv[2], "rb");
 	fseek(f, 0, SEEK_END);
 	long fsize = ftell(f);
 	fseek(f, 0, SEEK_SET);
