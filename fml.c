@@ -648,7 +648,8 @@ binop(Parser *parser, Ast *left, int rbp)
 	ast->method_call.name->name = token.pos;
 	ast->method_call.name->len = token.end - token.pos;
 	ast->method_call.arguments = malloc(sizeof(*ast->method_call.arguments));
-	ast->method_call.arguments[0] = expression_bp(parser, rbp);
+	// TODO: leaked malloc
+	TRY(ast->method_call.arguments[0] = expression_bp(parser, rbp));
 	//TRY(ast->method_call.arguments = expression_bp(parser, rbp));
 	ast->method_call.argument_cnt = 1;
 	return ast;
