@@ -84,7 +84,7 @@ typedef enum {
 
 
 typedef enum {
-	#define TOK_ENUM(tok, nud, led, lbp, rbp) TK_##tok,
+	#define TOK_ENUM(tok, ...) TK_##tok,
 	TOKENS(TOK_ENUM)
 	#undef TOK_ENUM
 	TK_OP_MIN = TK_BAR,
@@ -92,7 +92,7 @@ typedef enum {
 } TokenKind;
 
 static const char *tok_repr[] = {
-	#define TOK_STR(tok, nud, led, lbp, rbp) #tok,
+	#define TOK_STR(tok, ...) #tok,
 	TOKENS(TOK_STR)
 	#undef TOK_STR
 };
@@ -311,11 +311,8 @@ typedef struct {
 	size_t len;
 } Identifier;
 
+static Identifier THIS = { .name = (const unsigned char*) "this", .len = 4 };
 
-static Identifier THIS = {
-	.name = (const unsigned char*) "this",
-	.len = 4,
-};
 
 struct Ast {
 	AstKind kind;
@@ -779,6 +776,7 @@ expression_bp(Parser *parser, int bp)
 
 	if (!ni.nud) {
 		fprintf(stderr, "invalid start of expression: %s\n", tok_repr[token]);
+		return NULL;
 	}
 	TRY(left = ni.nud(parser));
 
@@ -1036,7 +1034,7 @@ value_print(Value value)
 		break;
 
 	case VK_FUNCTION:
-		printf("function %s", value_as_function(value)->function.name->name);
+		printf("function '%s'", value_as_function(value)->function.name->name);
 	}
 }
 
@@ -1223,15 +1221,8 @@ value_call_primitive_method(Value target, Identifier *method, Value *arguments, 
 		if (arguments[0].kind != VK_INTEGER) goto err;
 		#define OP(op) METHOD(#op) return make_integer(value_as_integer(target) op value_as_integer(arguments[0]))
 		#define REL_OP(op) METHOD(#op) return make_boolean(value_as_integer(target) op value_as_integer(arguments[0]))
-		OP(+);
-		OP(-);
-		OP(*);
-		OP(/);
-		OP(%);
-		REL_OP(<=);
-		REL_OP(<);
-		REL_OP(>=);
-		REL_OP(>);
+		OP(+); OP(-); OP(*); OP(/); OP(%);
+		REL_OP(<=); REL_OP(<); REL_OP(>=); REL_OP(>);
 		#undef OP
 		#undef REL_OP
 		break;
@@ -1436,7 +1427,7 @@ interpret(InterpreterState *is, Ast *ast)
 			is->env = saved_env;
 			return return_value;
 		} else {
-			// abuse the fact that there may be at the most two args
+			// abuse the fact that there may be at most two args
 			Value arguments[2];
 			assert(ast->method_call.argument_cnt <= 2);
 			for (size_t i = 0; i < ast->method_call.argument_cnt; i++) {
