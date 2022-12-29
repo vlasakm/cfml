@@ -312,6 +312,8 @@ typedef struct {
 } Identifier;
 
 static Identifier THIS = { .name = (const unsigned char*) "this", .len = 4 };
+static Identifier SET  = { .name = (const unsigned char*)  "set", .len = 3 };
+static Identifier GET  = { .name = (const unsigned char*)  "get", .len = 3 };
 
 
 struct Ast {
@@ -1077,50 +1079,6 @@ array_index(Value array_value, Value index_value)
 	return &array->values[index];
 }
 
-Value
-value_get_index(Value target, Value index)
-{
-	switch (target.kind) {
-	case VK_GCVALUE: {
-		switch (target.gcvalue->kind) {
-		case GK_ARRAY: {
-			Value *lvalue = array_index(target, index);
-			return *lvalue;
-		}
-		case GK_OBJECT: {
-			assert(false);
-		}
-		}
-		break;
-	}
-	default:
-		assert(false);
-	}
-	assert(false);
-}
-
-Value
-value_set_index(Value target, Value index, Value value)
-{
-	switch (target.kind) {
-	case VK_GCVALUE: {
-		switch (target.gcvalue->kind) {
-		case GK_ARRAY: {
-			Value *lvalue = array_index(target, index);
-			return *lvalue = value;
-		}
-		case GK_OBJECT: {
-			assert(false);
-		}
-		}
-		break;
-	}
-	default:
-		assert(false);
-	}
-	assert(false);
-}
-
 Value *
 value_field(Value value, Identifier *name)
 {
@@ -1358,13 +1316,14 @@ interpret(InterpreterState *is, Ast *ast)
 	case AST_INDEX_ACCESS: {
 		Value object = interpret(is, ast->index_access.object);
 		Value index = interpret(is, ast->index_access.index);
-		return value_get_index(object, index);
+		return value_call_primitive_method(object, &GET, &index, 1);
 	}
 	case AST_INDEX_ASSIGNMENT: {
 		Value object = interpret(is, ast->index_assignment.object);
-		Value index = interpret(is, ast->index_assignment.index);
-		Value value = interpret(is, ast->index_assignment.value);
-		return value_set_index(object, index, value);
+		Value arguments[2];
+		arguments[0] = interpret(is, ast->index_assignment.index);
+		arguments[1] = interpret(is, ast->index_assignment.value);
+		return value_call_primitive_method(object, &SET, &arguments[0], 2);
 	}
 
 	case AST_FIELD_ACCESS: {
