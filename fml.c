@@ -1122,8 +1122,12 @@ value_set_index(Value target, Value index, Value value)
 }
 
 Value *
-object_field(Object *object, Identifier *name)
+value_field(Value value, Identifier *name)
 {
+	if (!value_is_object(value)) {
+		return NULL;
+	}
+	Object *object = value_as_object(value);
 	for (size_t i = 0; i < object->field_cnt; i++) {
 		Identifier *field_name = object->fields[i].name;
 		if (value_is_function(object->fields[i].value)) {
@@ -1133,16 +1137,19 @@ object_field(Object *object, Identifier *name)
 			return &object->fields[i].value;
 		}
 	}
-	if (value_is_object(object->parent)) {
-		Object *parent = value_as_object(object->parent);
-		return object_field(parent, name);
-	}
-	return NULL;
+	return value_field(object->parent, name);
 }
 
 Ast *
-object_method(Object *object, Value *receiver, Identifier *name)
+value_method(Value value, Value *receiver, Identifier *name)
 {
+	if (!value_is_object(value)) {
+		// We did not find the method, but we have the eldest parent
+		// object on which we can call a primitive method (hopefully)
+		*receiver = value;
+		return NULL;
+	}
+	Object *object = value_as_object(value);
 	for (size_t i = 0; i < object->field_cnt; i++) {
 		Identifier *field_name = object->fields[i].name;
 		if (!value_is_function(object->fields[i].value)) {
@@ -1155,26 +1162,7 @@ object_method(Object *object, Value *receiver, Identifier *name)
 			return value_as_function(object->fields[i].value);
 		}
 	}
-	if (value_is_object(object->parent)) {
-		Object *parent = value_as_object(object->parent);
-		return object_method(parent, receiver, name);
-	}
-	// We did not find the method, but we have the eldest parent object on which
-	// we can call a primitive method, hopefully
-	*receiver = object->parent;
-	return NULL;
-}
-
-Ast *
-value_get_method(Value value, Value *receiver, Identifier *name)
-{
-	if (value_is_object(value)) {
-		Object *object = value_as_object(value);
-		Ast *function = object_method(object, receiver, name);
-
-		return function;
-	}
-	return NULL;
+	return value_method(object->parent, receiver, name);
 }
 
 Value
@@ -1380,22 +1368,14 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 
 	case AST_FIELD_ACCESS: {
-		Value object_value = interpret(is, ast->field_access.object);
-		if (!value_is_object(object_value)) {
-			assert(false);
-		}
-		Object *object = value_as_object(object_value);
-		Value *lvalue = object_field(object, ast->field_access.field);
+		Value object = interpret(is, ast->field_access.object);
+		Value *lvalue = value_field(object, ast->field_access.field);
 		return *lvalue;
 	}
 	case AST_FIELD_ASSIGNMENT: {
-		Value object_value = interpret(is, ast->field_assignment.object);
+		Value object = interpret(is, ast->field_assignment.object);
 		Value value = interpret(is, ast->field_assignment.value);
-		if (!value_is_object(object_value)) {
-			assert(false);
-		}
-		Object *object = value_as_object(object_value);
-		Value *lvalue = object_field(object, ast->field_assignment.field);
+		Value *lvalue = value_field(object, ast->field_access.field);
 		return *lvalue = value;
 	}
 
@@ -1414,7 +1394,7 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 	case AST_METHOD_CALL: {
 		Value object = interpret(is, ast->method_call.object);
-		Ast *function = value_get_method(object, &object, ast->method_call.name);
+		Ast *function = value_method(object, &object, ast->method_call.name);
 		if (function) {
 			Environment *saved_env = is->env;
 			Environment *new_env = is->env;
