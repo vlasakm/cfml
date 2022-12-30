@@ -224,10 +224,10 @@ lex_next(Lexer *lexer, Token *token)
 
 	switch (state) {
 	case LS_START: case LS_LINE_COMMENT: tok = TK_EOF; goto prev_done;
-	case LS_IDENTIFIER: tok = TK_IDENTIFIER; goto done;
-	case LS_NUMBER: tok = TK_NUMBER; goto done;
+	case LS_IDENTIFIER: tok = TK_IDENTIFIER; goto prev_done;
+	case LS_NUMBER: tok = TK_NUMBER; goto prev_done;
 	case LS_STRING: case LS_STRING_ESC: case LS_BLOCK_COMMENT: case LS_BLOCK_COMMENT_STAR: goto err;
-	case LS_SLASH: case LS_MINUS: case LS_EQUAL: case LS_GREATER: case LS_LESS: tok = TK_SLASH; goto done;
+	case LS_SLASH: case LS_MINUS: case LS_EQUAL: case LS_GREATER: case LS_LESS: tok = TK_SLASH; goto prev_done;
 	case LS_EXCLAM: goto err;
 	}
 
@@ -238,7 +238,6 @@ err:
 	length = lexer->pos - start + end_offset;
 	size_t line = lexer->line_num + 1;
 	size_t col = start - lexer->line_start + 1;
-	fprintf(stderr, "TOK[%2zu:%2zu]: %s %.*s\n", line, col, tok_repr[tok], (int) length, start);
 	static struct {
 		const char *str;
 		TokenKind tok;
@@ -268,6 +267,7 @@ err:
 			}
 		}
 	}
+	fprintf(stderr, "TOK[%2zu:%2zu]: %s %.*s\n", line, col, tok_repr[tok], (int) length, start);
 	token->kind = tok;
 	token->pos = start;
 	token->end = lexer->pos + end_offset;
