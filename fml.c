@@ -283,6 +283,7 @@ typedef struct {
 static Identifier THIS = { .name = (const unsigned char*) "this", .len = 4 };
 static Identifier SET  = { .name = (const unsigned char*)  "set", .len = 3 };
 static Identifier GET  = { .name = (const unsigned char*)  "get", .len = 3 };
+static Identifier EMPTY  = { .name = (const unsigned char*)  "", .len = 0 };
 
 #define ASTS(_) \
 	_(AST_NULL,                null,                AstNull,               { int _dummy; }) \
@@ -1190,6 +1191,13 @@ err:
 	assert(false);
 }
 
+typedef struct {
+	Environment *env;
+	Environment **global_env;
+	bool in_global;
+} InterpreterState;
+
+
 Environment *
 make_env(Environment *prev, Identifier *name, Value value)
 {
@@ -1214,10 +1222,17 @@ env_lookup_raw(Environment *env, Identifier *name)
 }
 
 Value *
-env_lookup(Environment *env, Identifier *name)
+env_lookup(InterpreterState *is, Identifier *name)
 {
-	Value *lvalue = env_lookup_raw(env, name);
-	if (lvalue && value_is_function(*lvalue)) {
+	Value *lvalue = env_lookup_raw(is->env, name);
+	if (!lvalue) {
+		// Name not found, should be a global whose
+		// definition we will yet see.
+		Value null = make_null();
+		Environment *fixup = make_env((*is->global_env)->prev, name, null);
+		(*is->global_env)->prev = fixup;
+		lvalue = &fixup->value;
+	} else if (value_is_function(*lvalue)) {
 		return NULL;
 	}
 	return lvalue;
@@ -1232,12 +1247,6 @@ env_lookup_func(Environment *env, Identifier *name)
 	}
 	return NULL;
 }
-
-typedef struct {
-	Environment *env;
-	Environment **global_env;
-	bool in_global;
-} InterpreterState;
 
 static Value interpreter_call_method(InterpreterState *is, Value object, bool function_call, Identifier *method, Ast **ast_arguments, size_t argument_cnt);
 
@@ -1300,14 +1309,12 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 
 	case AST_VARIABLE_ACCESS: {
-		Value *lvalue = env_lookup(is->env, ast->variable_access.name);
-		assert(lvalue);
+		Value *lvalue = env_lookup(is, ast->variable_access.name);
 		return *lvalue;
 	}
 	case AST_VARIABLE_ASSIGNMENT: {
 		Value value = interpret(is, ast->variable_assignment.value);
-		Value *lvalue = env_lookup(is->env, ast->variable_assignment.name);
-		assert(lvalue);
+		Value *lvalue = env_lookup(is, ast->variable_assignment.name);
 		return *lvalue = value;
 	}
 
@@ -1400,9 +1407,11 @@ interpret(InterpreterState *is, Ast *ast)
 		return make_null();
 	}
 	case AST_BLOCK: {
+		Value dummy = make_null();
+		is->env = make_env(is->env, &EMPTY, dummy);
 		Environment *saved_env = is->env;
 		bool saved_in_global = is->in_global;
-		if (is->in_global && is->env) {
+		if (is->in_global && is->env->prev) {
 			// Hack for the top level
 			is->global_env = &saved_env;
 			is->in_global = false;
@@ -1411,7 +1420,7 @@ interpret(InterpreterState *is, Ast *ast)
 		for (size_t i = 0; i < ast->block.expression_cnt; i++) {
 			value = interpret(is, ast->block.expressions[i]);
 		}
-		is->env = saved_env;
+		is->env = saved_env->prev;
 		is->in_global = saved_in_global;
 		if (is->in_global) {
 			is->global_env = &is->env;
