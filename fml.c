@@ -514,8 +514,9 @@ static Ast *
 block(Parser *parser)
 {
 	Ast *ast = make_ast(AST_BLOCK);
+	AstBlock *block = &ast->block;
 	TRY(eat(parser, TK_BEGIN));
-	TRY(separated_list(parser, (void*(*)(Parser*))expression, (void***)&ast->block.expressions, &ast->block.expression_cnt, TK_SEMICOLON, TK_END));
+	TRY(separated_list(parser, (void*(*)(Parser*))expression, (void***)&block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_END));
 	return ast;
 }
 
@@ -644,7 +645,7 @@ binop(Parser *parser, Ast *left, int rbp)
 	method_call->arguments = malloc(sizeof(*method_call->arguments));
 	// TODO: leaked malloc
 	TRY(method_call->arguments[0] = expression_bp(parser, rbp));
-	//TRY(ast->method_call.arguments = expression_bp(parser, rbp));
+	//TRY(method_call->arguments = expression_bp(parser, rbp));
 	method_call->argument_cnt = 1;
 	return ast;
 }
