@@ -1237,7 +1237,11 @@ env_lookup_func(Environment *env, Identifier *name)
 
 typedef struct {
 	Environment *env;
+	Environment **global_env;
+	bool in_global;
 } InterpreterState;
+
+static Value interpreter_call_method(InterpreterState *is, Value object, bool function_call, Identifier *method, Ast **ast_arguments, size_t argument_cnt);
 
 Value
 interpret(InterpreterState *is, Ast *ast)
@@ -1311,15 +1315,12 @@ interpret(InterpreterState *is, Ast *ast)
 
 	case AST_INDEX_ACCESS: {
 		Value object = interpret(is, ast->index_access.object);
-		Value index = interpret(is, ast->index_access.index);
-		return value_call_primitive_method(object, &GET, &index, 1);
+		return interpreter_call_method(is, object, false, &GET, &ast->index_access.index, 1);
 	}
 	case AST_INDEX_ASSIGNMENT: {
 		Value object = interpret(is, ast->index_assignment.object);
-		Value arguments[2];
-		arguments[0] = interpret(is, ast->index_assignment.index);
-		arguments[1] = interpret(is, ast->index_assignment.value);
-		return value_call_primitive_method(object, &SET, &arguments[0], 2);
+		Ast *arguments[2] = {ast->index_assignment.index, ast->index_assignment.value};
+		return interpreter_call_method(is, object, false, &SET, &arguments[0], 2);
 	}
 
 	case AST_FIELD_ACCESS: {
@@ -1335,41 +1336,12 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 
 	case AST_FUNCTION_CALL: {
-		Ast *function = env_lookup_func(is->env, ast->function_call.name);
-		assert(function);
-		assert(function->function.parameter_cnt == ast->function_call.argument_cnt);
-		Environment *saved_env = is->env;
-		for (size_t i = 0; i < ast->function_call.argument_cnt; i++) {
-			Value value = interpret(is, ast->function_call.arguments[i]);
-			is->env = make_env(is->env, function->function.parameters[i], value);
-		}
-		Value return_value = interpret(is, function->function.body);
-		is->env = saved_env;
-		return return_value;
+		Value dummy = make_null();
+		return interpreter_call_method(is, dummy, true, ast->function_call.name, ast->function_call.arguments, ast->function_call.argument_cnt);
 	}
 	case AST_METHOD_CALL: {
 		Value object = interpret(is, ast->method_call.object);
-		Ast *function = value_method(object, &object, ast->method_call.name);
-		if (function) {
-			Environment *saved_env = is->env;
-			Environment *new_env = is->env;
-			for (size_t i = 0; i < ast->method_call.argument_cnt; i++) {
-				Value value = interpret(is, ast->method_call.arguments[i]);
-				new_env = make_env(new_env, function->function.parameters[i], value);
-			}
-			is->env = make_env(new_env, &THIS, object);
-			Value return_value = interpret(is, function->function.body);
-			is->env = saved_env;
-			return return_value;
-		} else {
-			// abuse the fact that there may be at most two args
-			Value arguments[2];
-			assert(ast->method_call.argument_cnt <= 2);
-			for (size_t i = 0; i < ast->method_call.argument_cnt; i++) {
-				arguments[i] = interpret(is, ast->method_call.arguments[i]);
-			}
-			return value_call_primitive_method(object, ast->method_call.name, &arguments[0], ast->method_call.argument_cnt);
-		}
+		return interpreter_call_method(is, object, false, ast->method_call.name, ast->method_call.arguments, ast->method_call.argument_cnt);
 	}
 
 	case AST_IF: {
@@ -1431,15 +1403,73 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 	case AST_BLOCK: {
 		Environment *saved_env = is->env;
+		bool saved_in_global = is->in_global;
+		if (is->in_global && is->env) {
+			// Hack for the top level
+			is->global_env = &saved_env;
+			is->in_global = false;
+		}
 		Value value = make_null();
 		for (size_t i = 0; i < ast->block.expression_cnt; i++) {
 			value = interpret(is, ast->block.expressions[i]);
 		}
 		is->env = saved_env;
+		is->in_global = saved_in_global;
+		if (is->in_global) {
+			is->global_env = &is->env;
+		}
 		return value;
 	}
 	}
 	__builtin_unreachable();
+}
+
+static Value
+interpreter_call_method(InterpreterState *is, Value object, bool function_call, Identifier *method, Ast **ast_arguments, size_t argument_cnt)
+{
+	Value return_value;
+	Value *arguments = calloc(argument_cnt, sizeof(*arguments));
+
+	for (size_t i = 0; i < argument_cnt; i++) {
+		arguments[i] = interpret(is, ast_arguments[i]);
+	}
+
+	Ast *function;
+	if (function_call) {
+		function = env_lookup_func(*is->global_env, method);
+	} else {
+		function = value_method(object, &object, method);
+	}
+	if (function) {
+		assert(argument_cnt == function->function.parameter_cnt);
+
+		Environment *saved_env = is->env;
+		bool saved_in_global = is->in_global;
+		if (is->in_global) {
+			is->global_env = &saved_env;
+			is->in_global = false;
+		}
+		// Starting with _only_ the global environment, add the function
+		// arguments to the scope
+		is->env = *is->global_env;
+		for (size_t i = 0; i < argument_cnt; i++) {
+			is->env = make_env(is->env, function->function.parameters[i], arguments[i]);
+		}
+		if (!function_call) {
+			is->env = make_env(is->env, &THIS, object);
+		}
+		return_value = interpret(is, function->function.body);
+		is->env = saved_env;
+		is->in_global = saved_in_global;
+		if (is->in_global) {
+			is->global_env = &is->env;
+		}
+		return return_value;
+	} else {
+		return_value = value_call_primitive_method(object, method, &arguments[0], argument_cnt);
+	}
+	free(arguments);
+	return return_value;
 }
 
 int
@@ -1468,6 +1498,9 @@ main(int argc, char **argv) {
 
 	InterpreterState is = {
 		.env = NULL,
+		.global_env = &is.env,
+		.in_global = true,
+
 	};
 	interpret(&is, ast);
 
