@@ -280,10 +280,16 @@ typedef struct {
 	size_t len;
 } Identifier;
 
-static Identifier THIS = { .name = (const unsigned char*) "this", .len = 4 };
-static Identifier SET  = { .name = (const unsigned char*)  "set", .len = 3 };
-static Identifier GET  = { .name = (const unsigned char*)  "get", .len = 3 };
-static Identifier EMPTY  = { .name = (const unsigned char*)  "", .len = 0 };
+bool
+ident_cmp(Identifier a, Identifier b)
+{
+	return a.len == b.len && memcmp(a.name, b.name, a.len) == 0;
+}
+
+static Identifier THIS  = { .name = (const unsigned char*) "this", .len = 4 };
+static Identifier SET   = { .name = (const unsigned char*)  "set", .len = 3 };
+static Identifier GET   = { .name = (const unsigned char*)  "get", .len = 3 };
+static Identifier EMPTY = { .name = (const unsigned char*)     "", .len = 0 };
 
 #define ASTS(_) \
 	_(AST_NULL,                null,                AstNull,               { int _dummy; }) \
@@ -293,24 +299,24 @@ static Identifier EMPTY  = { .name = (const unsigned char*)  "", .len = 0 };
 	_(AST_ARRAY,               array,               AstArray,              { Ast *size; Ast *initializer; }) \
 	_(AST_OBJECT,              object,              AstObject,             { Ast *extends; Ast **members; size_t member_cnt; }) \
 	\
-	_(AST_VARIABLE,            variable,            AstVariable,           { Identifier *name; Ast *value; }) \
-	_(AST_FUNCTION,            function,            AstFunction,           { Identifier *name; Identifier **parameters; size_t parameter_cnt; Ast *body; }) \
+	_(AST_VARIABLE,            variable,            AstVariable,           { Identifier name; Ast *value; }) \
+	_(AST_FUNCTION,            function,            AstFunction,           { Identifier name; Identifier *parameters; size_t parameter_cnt; Ast *body; }) \
 	\
-	_(AST_VARIABLE_ACCESS,     variable_access,     AstVariableAccess,     { Identifier *name; }) \
-	_(AST_VARIABLE_ASSIGNMENT, variable_assignment, AstVariableAssignment, { Identifier *name; Ast *value; }) \
+	_(AST_VARIABLE_ACCESS,     variable_access,     AstVariableAccess,     { Identifier name; }) \
+	_(AST_VARIABLE_ASSIGNMENT, variable_assignment, AstVariableAssignment, { Identifier name; Ast *value; }) \
 	\
 	_(AST_INDEX_ACCESS,        index_access,        AstIndexAccess,        { Ast *object; Ast *index; }) \
 	_(AST_INDEX_ASSIGNMENT,    index_assignment,    AstIndexAssignment,    { Ast *object; Ast *index; Ast *value; }) \
 	\
-	_(AST_FIELD_ACCESS,        field_access,        AstFieldAccess,        { Ast *object; Identifier *field; }) \
-	_(AST_FIELD_ASSIGNMENT,    field_assignment,    AstFieldAssignment,    { Ast *object; Identifier *field; Ast *value; }) \
+	_(AST_FIELD_ACCESS,        field_access,        AstFieldAccess,        { Ast *object; Identifier field; }) \
+	_(AST_FIELD_ASSIGNMENT,    field_assignment,    AstFieldAssignment,    { Ast *object; Identifier field; Ast *value; }) \
 	\
-	_(AST_FUNCTION_CALL,       function_call,       AstFunctionCall,       { Identifier *name; Ast **arguments; size_t argument_cnt; }) \
-	_(AST_METHOD_CALL,         method_call,         AstMethodCall,         { Ast* object; Identifier *name; Ast **arguments; size_t argument_cnt; }) \
+	_(AST_FUNCTION_CALL,       function_call,       AstFunctionCall,       { Identifier name; Ast **arguments; size_t argument_cnt; }) \
+	_(AST_METHOD_CALL,         method_call,         AstMethodCall,         { Ast* object; Identifier name; Ast **arguments; size_t argument_cnt; }) \
 	\
 	_(AST_IF,                  conditional,         AstConditional,        { Ast *condition; Ast *consequent; Ast *alternative; }) \
 	_(AST_WHILE,               loop,                AstLoop,               { Ast *condition; Ast *body; }) \
-	_(AST_PRINT,               print,               AstPrint,              { Identifier *format; Ast **arguments; size_t argument_cnt; }) \
+	_(AST_PRINT,               print,               AstPrint,              { Identifier format; Ast **arguments; size_t argument_cnt; }) \
 	_(AST_BLOCK,               block,               AstBlock,              { Ast **expressions; size_t expression_cnt; }) \
 
 typedef enum {
@@ -371,29 +377,27 @@ eat(Parser *parser, TokenKind kind)
 	return true;
 }
 
-static Identifier *
-eat_identifier(Parser *parser)
+static bool
+eat_identifier(Parser *parser, Identifier *identifier)
 {
 	Token tok = discard(parser);
 	if (tok.kind != TK_IDENTIFIER && (tok.kind < TK_OP_MIN || tok.kind > TK_OP_MAX)) {
 		fprintf(stderr, "expected an identifier, found %s\n", tok_repr[tok.kind]);
-		return NULL;
+		return false;
 	}
-	Identifier *identifier = calloc(1, sizeof(*identifier));
 	identifier->name = tok.pos;
 	identifier->len = tok.end - tok.pos;
-	return identifier;
+	return true;
 }
 
 static Identifier *
-eat_string(Parser *parser)
+eat_string(Parser *parser, Identifier *identifier)
 {
 	Token tok = discard(parser);
 	if (tok.kind != TK_STRING) {
 		printf("expected %s, found %s\n", tok_repr[TK_STRING], tok_repr[tok.kind]);
-		return NULL;
+		return false;
 	}
-	Identifier *identifier = calloc(1, sizeof(*identifier));
 	identifier->name = tok.pos;
 	identifier->len = tok.end - tok.pos;
 	return identifier;
@@ -434,9 +438,8 @@ expression(Parser *parser)
 	return expression_bp(parser, 0);
 }
 
-
 static bool
-separated_list(Parser *parser, void*(*one)(Parser *), void ***list, size_t *n, TokenKind separator, TokenKind terminator)
+expression_list(Parser *parser, Ast ***list, size_t *n, TokenKind separator, TokenKind terminator)
 {
 	size_t capacity = 0;
 	*list = NULL;
@@ -448,8 +451,8 @@ separated_list(Parser *parser, void*(*one)(Parser *), void ***list, size_t *n, T
 			*list = realloc(*list, capacity * sizeof((*list)[0]));
 		}
 
-		void *expr;
-		TRY(expr = one(parser));
+		Ast *expr;
+		TRY(expr = expression(parser));
 		(*list)[*n] = expr;
 		*n += 1;
 
@@ -461,6 +464,32 @@ separated_list(Parser *parser, void*(*one)(Parser *), void ***list, size_t *n, T
 
 	return true;
 }
+
+static bool
+identifier_list(Parser *parser, Identifier **list, size_t *n, TokenKind separator, TokenKind terminator)
+{
+	size_t capacity = 0;
+	*list = NULL;
+	*n = 0;
+
+	while (!try_eat(parser, terminator)) {
+		if (capacity == 0 || *n == capacity) {
+			capacity = capacity ? capacity * 2 : 4;
+			*list = realloc(*list, capacity * sizeof((*list)[0]));
+		}
+
+		TRY(eat_identifier(parser, &(*list)[*n]));
+		*n += 1;
+
+		if (!try_eat(parser, separator)) {
+			TRY(eat(parser, terminator));
+			return true;
+		}
+	}
+
+	return true;
+}
+
 
 static Ast *
 primary(Parser *parser)
@@ -506,7 +535,7 @@ static Ast *
 ident(Parser *parser)
 {
 	Ast *ast = make_ast(AST_VARIABLE_ACCESS);
-	TRY(ast->variable_access.name = eat_identifier(parser));
+	TRY(eat_identifier(parser, &ast->variable_access.name));
 	return ast;
 }
 
@@ -516,7 +545,7 @@ block(Parser *parser)
 	Ast *ast = make_ast(AST_BLOCK);
 	AstBlock *block = &ast->block;
 	TRY(eat(parser, TK_BEGIN));
-	TRY(separated_list(parser, (void*(*)(Parser*))expression, (void***)&block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_END));
+	TRY(expression_list(parser, &block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_END));
 	return ast;
 }
 
@@ -526,7 +555,7 @@ let(Parser *parser)
 	Ast *ast = make_ast(AST_VARIABLE);
 	AstVariable *variable = &ast->variable;
 	TRY(eat(parser, TK_LET));
-	TRY(variable->name = eat_identifier(parser));
+	TRY(eat_identifier(parser, &variable->name));
 	TRY(eat(parser, TK_EQUAL));
 	TRY(variable->value = expression(parser));
 	return ast;
@@ -558,7 +587,7 @@ object(Parser *parser)
 		object->extends = create_null(parser);
 	}
 	TRY(eat(parser, TK_BEGIN));
-	TRY(separated_list(parser, (void*(*)(Parser*))expression, (void***)&object->members, &object->member_cnt, TK_SEMICOLON, TK_END));
+	TRY(expression_list(parser, &object->members, &object->member_cnt, TK_SEMICOLON, TK_END));
 	return ast;
 }
 
@@ -598,9 +627,9 @@ print(Parser *parser)
 	AstPrint *print = &ast->print;
 	TRY(eat(parser, TK_PRINT));
 	TRY(eat(parser, TK_LPAREN));
-	TRY(print->format = eat_string(parser));
+	TRY(eat_string(parser, &print->format));
 	if (try_eat(parser, TK_COMMA)) {
-		TRY(separated_list(parser, (void*(*)(Parser*))expression, (void***)&print->arguments, &print->argument_cnt, TK_COMMA, TK_RPAREN));
+		TRY(expression_list(parser, &print->arguments, &print->argument_cnt, TK_COMMA, TK_RPAREN));
 	} else {
 		TRY(eat(parser, TK_RPAREN));
 	}
@@ -624,9 +653,9 @@ function(Parser *parser)
 	Ast *ast = make_ast(AST_FUNCTION);
 	AstFunction *function = &ast->function;
 	TRY(eat(parser, TK_FUNCTION));
-	TRY(function->name = eat_identifier(parser));
+	TRY(eat_identifier(parser, &function->name));
 	TRY(eat(parser, TK_LPAREN));
-	TRY(separated_list(parser, (void*(*)(Parser*))eat_identifier, (void***)&function->parameters, &function->parameter_cnt, TK_COMMA, TK_RPAREN));
+	TRY(identifier_list(parser, &function->parameters, &function->parameter_cnt, TK_COMMA, TK_RPAREN));
 	TRY(eat(parser, TK_RARROW));
 	TRY(function->body = expression(parser));
 	return ast;
@@ -639,9 +668,8 @@ binop(Parser *parser, Ast *left, int rbp)
 	AstMethodCall *method_call = &ast->method_call;
 	Token token = discard(parser);
 	method_call->object = left;
-	method_call->name = calloc(1, sizeof(Identifier));
-	method_call->name->name = token.pos;
-	method_call->name->len = token.end - token.pos;
+	method_call->name.name = token.pos;
+	method_call->name.len = token.end - token.pos;
 	method_call->arguments = malloc(sizeof(*method_call->arguments));
 	// TODO: leaked malloc
 	TRY(method_call->arguments[0] = expression_bp(parser, rbp));
@@ -663,7 +691,7 @@ call(Parser *parser, Ast *left, int rbp)
 		AstVariableAccess variable_access = left->variable_access;
 		AstFunctionCall *function_call = &left->function_call;
 		function_call->name = variable_access.name;
-		TRY(separated_list(parser, (void*(*)(Parser*))expression, (void***)&function_call->arguments, &function_call->argument_cnt, TK_COMMA, TK_RPAREN));
+		TRY(expression_list(parser, &function_call->arguments, &function_call->argument_cnt, TK_COMMA, TK_RPAREN));
 		return left;
 	}
 	case AST_FIELD_ACCESS: {
@@ -672,7 +700,7 @@ call(Parser *parser, Ast *left, int rbp)
 		AstMethodCall *method_call = &left->method_call;
 		method_call->object = field_access.object;
 		method_call->name = field_access.field;
-		TRY(separated_list(parser, (void*(*)(Parser*))expression, (void***)&method_call->arguments, &method_call->argument_cnt, TK_COMMA, TK_RPAREN));
+		TRY(expression_list(parser, &method_call->arguments, &method_call->argument_cnt, TK_COMMA, TK_RPAREN));
 		return left;
 	}
 	default:
@@ -703,7 +731,7 @@ field(Parser *parser, Ast *left, int rbp)
 	AstFieldAccess *field_access = &ast->field_access;
 	TRY(eat(parser, TK_DOT));
 	field_access->object = left;
-	TRY(field_access->field = eat_identifier(parser));
+	TRY(eat_identifier(parser, &field_access->field));
 	return ast;
 }
 
@@ -801,7 +829,7 @@ parse(unsigned char *buf, size_t buf_len)
 	Ast *ast = make_ast(AST_BLOCK);
 	AstBlock *block = &ast->block;
 	// TODO: distinguish at the parser level an empty program (evaluates to null)
-	TRY(separated_list(&parser, (void*(*)(Parser*))expression, (void***)&block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_EOF));
+	TRY(expression_list(&parser, &block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_EOF));
 	return ast;
 }
 
@@ -842,7 +870,7 @@ typedef struct {
 } Array ;
 
 typedef struct {
-	Identifier *name;
+	Identifier name;
 	Value value;
 } Field;
 
@@ -1021,8 +1049,8 @@ value_print(Value value)
 					prev = false;
 					printf(", ");
 				}
-				Identifier *name = object->fields[i].name;
-				printf("%.*s=", (int)name->len, name->name);
+				Identifier name = object->fields[i].name;
+				printf("%.*s=", (int)name.len, name.name);
 				value_print(object->fields[i].value);
 				prev = true;
 			}
@@ -1032,7 +1060,7 @@ value_print(Value value)
 		break;
 
 	case VK_FUNCTION:
-		printf("function '%s'", value_as_function(value)->function.name->name);
+		printf("function '%s'", value_as_function(value)->function.name.name);
 	}
 }
 
@@ -1049,7 +1077,7 @@ typedef struct Environment Environment;
 
 struct Environment {
 	Environment *prev;
-	Identifier *name;
+	Identifier name;
 	Value value;
 };
 
@@ -1076,18 +1104,18 @@ array_index(Value array_value, Value index_value)
 }
 
 Value *
-value_field(Value value, Identifier *name)
+value_field(Value value, Identifier name)
 {
 	if (!value_is_object(value)) {
 		return NULL;
 	}
 	Object *object = value_as_object(value);
 	for (size_t i = 0; i < object->field_cnt; i++) {
-		Identifier *field_name = object->fields[i].name;
+		Identifier field_name = object->fields[i].name;
 		if (value_is_function(object->fields[i].value)) {
 			continue;
 		}
-		if (field_name->len == name->len && memcmp(field_name->name, name->name, name->len) == 0) {
+		if (ident_cmp(field_name, name)) {
 			return &object->fields[i].value;
 		}
 	}
@@ -1095,7 +1123,7 @@ value_field(Value value, Identifier *name)
 }
 
 Ast *
-value_method(Value value, Value *receiver, Identifier *name)
+value_method(Value value, Value *receiver, Identifier name)
 {
 	if (!value_is_object(value)) {
 		// We did not find the method, but we have the eldest parent
@@ -1105,11 +1133,11 @@ value_method(Value value, Value *receiver, Identifier *name)
 	}
 	Object *object = value_as_object(value);
 	for (size_t i = 0; i < object->field_cnt; i++) {
-		Identifier *field_name = object->fields[i].name;
+		Identifier field_name = object->fields[i].name;
 		if (!value_is_function(object->fields[i].value)) {
 			continue;
 		}
-		if (field_name->len == name->len && memcmp(field_name->name, name->name, name->len) == 0) {
+		if (ident_cmp(field_name, name)) {
 			// We found the method, set the receiver Object to the
 			// method's owner
 			receiver->gcvalue = &object->gcvalue;
@@ -1120,10 +1148,10 @@ value_method(Value value, Value *receiver, Identifier *name)
 }
 
 Value
-value_call_primitive_method(Value target, Identifier *method, Value *arguments, size_t argument_cnt)
+value_call_primitive_method(Value target, Identifier method, Value *arguments, size_t argument_cnt)
 {
-	const unsigned char *method_name = method->name;
-	size_t method_name_len = method->len;
+	const unsigned char *method_name = method.name;
+	size_t method_name_len = method.len;
 	#define METHOD(name) \
 			if (sizeof(name) - 1 == method_name_len && memcmp(name, method_name, method_name_len) == 0) /* body*/
 
@@ -1200,7 +1228,7 @@ typedef struct {
 
 
 Environment *
-make_env(Environment *prev, Identifier *name, Value value)
+make_env(Environment *prev, Identifier name, Value value)
 {
 	Environment *env = malloc(sizeof(*env));
 	env->prev = prev;
@@ -1210,20 +1238,19 @@ make_env(Environment *prev, Identifier *name, Value value)
 }
 
 Value *
-env_lookup_raw(Environment *env, Identifier *name)
+env_lookup_raw(Environment *env, Identifier name)
 {
 	if (!env) {
 		return NULL;
 	}
-	Identifier *env_name = env->name;
-	if (env_name->len == name->len && memcmp(env_name->name, name->name, name->len) == 0) {
+	if (ident_cmp(env->name, name)) {
 		return &env->value;
 	}
 	return env_lookup_raw(env->prev, name);
 }
 
 Value *
-env_lookup(InterpreterState *is, Identifier *name)
+env_lookup(InterpreterState *is, Identifier name)
 {
 	Value *lvalue = env_lookup_raw(is->env, name);
 	if (!lvalue) {
@@ -1240,7 +1267,7 @@ env_lookup(InterpreterState *is, Identifier *name)
 }
 
 Ast *
-env_lookup_func(Environment *env, Identifier *name)
+env_lookup_func(Environment *env, Identifier name)
 {
 	Value *lvalue = env_lookup_raw(env, name);
 	if (lvalue && value_is_function(*lvalue)) {
@@ -1249,7 +1276,7 @@ env_lookup_func(Environment *env, Identifier *name)
 	return NULL;
 }
 
-static Value interpreter_call_method(InterpreterState *is, Value object, bool function_call, Identifier *method, Ast **ast_arguments, size_t argument_cnt);
+static Value interpreter_call_method(InterpreterState *is, Value object, bool function_call, Identifier method, Ast **ast_arguments, size_t argument_cnt);
 
 Value
 interpret(InterpreterState *is, Ast *ast)
@@ -1321,12 +1348,12 @@ interpret(InterpreterState *is, Ast *ast)
 
 	case AST_INDEX_ACCESS: {
 		Value object = interpret(is, ast->index_access.object);
-		return interpreter_call_method(is, object, false, &GET, &ast->index_access.index, 1);
+		return interpreter_call_method(is, object, false, GET, &ast->index_access.index, 1);
 	}
 	case AST_INDEX_ASSIGNMENT: {
 		Value object = interpret(is, ast->index_assignment.object);
 		Ast *arguments[2] = {ast->index_assignment.index, ast->index_assignment.value};
-		return interpreter_call_method(is, object, false, &SET, &arguments[0], 2);
+		return interpreter_call_method(is, object, false, SET, &arguments[0], 2);
 	}
 
 	case AST_FIELD_ACCESS: {
@@ -1366,8 +1393,8 @@ interpret(InterpreterState *is, Ast *ast)
 		return value;
 	}
 	case AST_PRINT: {
-		const unsigned char *format = ast->print.format->name;
-		size_t length = ast->print.format->len;
+		const unsigned char *format = ast->print.format.name;
+		size_t length = ast->print.format.len;
 		bool in_escape = false;
 		size_t arg_index = 0;
 		Value *arguments = calloc(ast->print.argument_cnt, sizeof(*arguments));
@@ -1409,7 +1436,7 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 	case AST_BLOCK: {
 		Value dummy = make_null();
-		is->env = make_env(is->env, &EMPTY, dummy);
+		is->env = make_env(is->env, EMPTY, dummy);
 		Environment *saved_env = is->env;
 		bool saved_in_global = is->in_global;
 		if (is->in_global && is->env->prev) {
@@ -1433,7 +1460,7 @@ interpret(InterpreterState *is, Ast *ast)
 }
 
 static Value
-interpreter_call_method(InterpreterState *is, Value object, bool function_call, Identifier *method, Ast **ast_arguments, size_t argument_cnt)
+interpreter_call_method(InterpreterState *is, Value object, bool function_call, Identifier method, Ast **ast_arguments, size_t argument_cnt)
 {
 	Value return_value;
 	Value *arguments = calloc(argument_cnt, sizeof(*arguments));
@@ -1464,7 +1491,7 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 			is->env = make_env(is->env, function->function.parameters[i], arguments[i]);
 		}
 		if (!function_call) {
-			is->env = make_env(is->env, &THIS, object);
+			is->env = make_env(is->env, THIS, object);
 		}
 		return_value = interpret(is, function->function.body);
 		is->env = saved_env;
