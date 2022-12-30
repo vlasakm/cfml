@@ -453,7 +453,7 @@ separated_list(Parser *parser, void*(*one)(Parser *), void ***list, size_t *n, T
 		*n += 1;
 
 		if (!try_eat(parser, separator)) {
-			eat(parser, terminator);
+			TRY(eat(parser, terminator));
 			return true;
 		}
 	}
@@ -598,7 +598,7 @@ print(Parser *parser)
 	TRY(eat(parser, TK_LPAREN));
 	TRY(print->format = eat_string(parser));
 	if (try_eat(parser, TK_COMMA)) {
-		separated_list(parser, (void*(*)(Parser*))expression, (void***)&print->arguments, &print->argument_cnt, TK_COMMA, TK_RPAREN);
+		TRY(separated_list(parser, (void*(*)(Parser*))expression, (void***)&print->arguments, &print->argument_cnt, TK_COMMA, TK_RPAREN));
 	} else {
 		TRY(eat(parser, TK_RPAREN));
 	}
