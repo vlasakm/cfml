@@ -8,10 +8,20 @@
 
 #define PROJECT_NAME "fml"
 
+typedef uint8_t  u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
+
+typedef int8_t  i8;
+typedef int16_t i16;
+typedef int32_t i32;
+typedef int64_t i64;
+
 typedef struct {
-	const unsigned char *pos;
-	const unsigned char *end;
-	const unsigned char *line_start;
+	const u8 *pos;
+	const u8 *end;
+	const u8 *line_start;
 	size_t line_num; // zero-based
 } Lexer;
 
@@ -99,14 +109,14 @@ static const char *tok_repr[] = {
 
 typedef struct {
 	TokenKind kind;
-	const unsigned char *pos;
-	const unsigned char *end;
+	const u8 *pos;
+	const u8 *end;
 	size_t line;
 	size_t col;
 } Token;
 
 Lexer
-lex_init(const unsigned char *buf, size_t size)
+lex_init(const u8 *buf, size_t size)
 {
 	return (Lexer) {
 		.pos = buf,
@@ -126,10 +136,10 @@ lex_next(Lexer *lexer, Token *token)
 	LexState state = LS_START;
 	TokenKind tok = TK_ERROR;
 	ssize_t end_offset = 0;
-	const unsigned char *start = lexer->pos;
+	const u8 *start = lexer->pos;
 	size_t length;
 	while (lexer->pos != lexer->end) {
-		unsigned char c = *lexer->pos;
+		u8 c = *lexer->pos;
 		switch (state) {
 		case LS_START: switch (c) {
 			case '\n': lexer->line_start = start += 1; lexer->line_num += 1; break;
@@ -276,7 +286,7 @@ err:
 }
 
 typedef struct {
-	const unsigned char *name;
+	const u8 *name;
 	size_t len;
 } Identifier;
 
@@ -286,15 +296,15 @@ ident_cmp(Identifier a, Identifier b)
 	return a.len == b.len && memcmp(a.name, b.name, a.len) == 0;
 }
 
-static Identifier THIS  = { .name = (const unsigned char*) "this", .len = 4 };
-static Identifier SET   = { .name = (const unsigned char*)  "set", .len = 3 };
-static Identifier GET   = { .name = (const unsigned char*)  "get", .len = 3 };
-static Identifier EMPTY = { .name = (const unsigned char*)     "", .len = 0 };
+static Identifier THIS  = { .name = (const u8*) "this", .len = 4 };
+static Identifier SET   = { .name = (const u8*)  "set", .len = 3 };
+static Identifier GET   = { .name = (const u8*)  "get", .len = 3 };
+static Identifier EMPTY = { .name = (const u8*)     "", .len = 0 };
 
 #define ASTS(_) \
 	_(AST_NULL,                null,                AstNull,               { int _dummy; }) \
 	_(AST_BOOLEAN,             boolean,             AstBoolean,            { bool value; }) \
-	_(AST_INTEGER,             integer,             AstInteger,            { int32_t value; }) \
+	_(AST_INTEGER,             integer,             AstInteger,            { i32 value; }) \
 	\
 	_(AST_ARRAY,               array,               AstArray,              { Ast *size; Ast *initializer; }) \
 	_(AST_OBJECT,              object,              AstObject,             { Ast *extends; Ast **members; size_t member_cnt; }) \
@@ -346,7 +356,7 @@ typedef struct {
 } Parser;
 
 void
-parser_init(Parser *parser, const unsigned char *buf, size_t buf_len)
+parser_init(Parser *parser, const u8 *buf, size_t buf_len)
 {
 	parser->lexer = lex_init(buf, buf_len);
 	lex_next(&parser->lexer, &parser->lookahead);
@@ -499,13 +509,13 @@ primary(Parser *parser)
 	switch (token.kind) {
 	case TK_NUMBER:
 		ast->kind = AST_INTEGER;
-		const unsigned char *pos = token.pos;
+		const u8 *pos = token.pos;
 		bool negative = 0;
 		while (*pos == '-') {
 			negative = !negative;
 			pos += 1;
 		}
-		int32_t value = 0;
+		i32 value = 0;
 		for (; pos < token.end; pos++) {
 			value = value * 10 + *pos - '0';
 		}
@@ -822,7 +832,7 @@ expression_bp(Parser *parser, int bp)
 }
 
 Ast *
-parse(unsigned char *buf, size_t buf_len)
+parse(u8 *buf, size_t buf_len)
 {
 	Parser parser;
 	parser_init(&parser, buf, buf_len);
@@ -853,9 +863,10 @@ typedef struct {
 	ValueKind kind;
 	union {
 		bool boolean;
-		int32_t integer;
+		i32 integer;
 		GcValue *gcvalue;
 		Ast *function;
+		uintptr_t function_index;
 	};
 } Value;
 
@@ -900,7 +911,7 @@ make_boolean(bool value)
 }
 
 Value
-make_integer(int32_t value)
+make_integer(i32 value)
 {
 	return (Value) { .kind = VK_INTEGER, .integer = value };
 }
@@ -957,7 +968,7 @@ value_is_integer(Value value)
 	return value.kind == VK_INTEGER;
 }
 
-int32_t
+i32
 value_as_integer(Value value)
 {
 	assert(value.kind == VK_INTEGER);
@@ -999,9 +1010,15 @@ value_is_function(Value value)
 }
 
 Ast *
-value_as_function(Value value)
+value_as_function_ast(Value value)
 {
 	return value.function;
+}
+
+u16
+value_as_function_bc(Value value)
+{
+	return (u16) value.function_index;
 }
 
 void
@@ -1060,7 +1077,8 @@ value_print(Value value)
 		break;
 
 	case VK_FUNCTION:
-		printf("function '%s'", value_as_function(value)->function.name.name);
+		printf("function '%p'", (void *) value.function);
+		break;
 	}
 }
 
@@ -1087,7 +1105,7 @@ value_as_index(Value value)
 	if (!value_is_integer(value)) {
 		assert(false);
 	}
-	int32_t int_index = value_as_integer(value);
+	i32 int_index = value_as_integer(value);
 	if (int_index < 0) {
 		assert(false);
 	}
@@ -1122,7 +1140,7 @@ value_field(Value value, Identifier name)
 	return value_field(object->parent, name);
 }
 
-Ast *
+Value *
 value_method(Value value, Value *receiver, Identifier name)
 {
 	if (!value_is_object(value)) {
@@ -1141,7 +1159,7 @@ value_method(Value value, Value *receiver, Identifier name)
 			// We found the method, set the receiver Object to the
 			// method's owner
 			receiver->gcvalue = &object->gcvalue;
-			return value_as_function(object->fields[i].value);
+			return &object->fields[i].value;
 		}
 	}
 	return value_method(object->parent, receiver, name);
@@ -1150,7 +1168,7 @@ value_method(Value value, Value *receiver, Identifier name)
 Value
 value_call_primitive_method(Value target, Identifier method, Value *arguments, size_t argument_cnt)
 {
-	const unsigned char *method_name = method.name;
+	const u8 *method_name = method.name;
 	size_t method_name_len = method.len;
 	#define METHOD(name) \
 			if (sizeof(name) - 1 == method_name_len && memcmp(name, method_name, method_name_len) == 0) /* body*/
@@ -1271,7 +1289,7 @@ env_lookup_func(Environment *env, Identifier name)
 {
 	Value *lvalue = env_lookup_raw(env, name);
 	if (lvalue && value_is_function(*lvalue)) {
-		return value_as_function(*lvalue);
+		return value_as_function_ast(*lvalue);
 	}
 	return NULL;
 }
@@ -1393,7 +1411,7 @@ interpret(InterpreterState *is, Ast *ast)
 		return value;
 	}
 	case AST_PRINT: {
-		const unsigned char *format = ast->print.format.name;
+		const u8 *format = ast->print.format.name;
 		size_t length = ast->print.format.len;
 		bool in_escape = false;
 		size_t arg_index = 0;
@@ -1402,7 +1420,7 @@ interpret(InterpreterState *is, Ast *ast)
 			arguments[i] = interpret(is, ast->print.arguments[i]);
 		}
 		for (size_t i = 0; i < length; i++) {
-			unsigned char c = format[i];
+			u8 c = format[i];
 			if (in_escape) {
 				in_escape = false;
 				switch (c) {
@@ -1473,7 +1491,7 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 	if (function_call) {
 		function = env_lookup_func(*is->global_env, method);
 	} else {
-		function = value_method(object, &object, method);
+		function = value_as_function_ast(*value_method(object, &object, method));
 	}
 	if (function) {
 		assert(argument_cnt == function->function.parameter_cnt);
@@ -1507,16 +1525,422 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 	return return_value;
 }
 
+static u32
+read_u32(u8 **src)
+{
+	// beware of implicit promotion from uint8_t to signed int
+	// https://www.reddit.com/r/C_Programming/comments/bjuk3v/the_byte_order_fallacy/embbwq2/
+	u8 *pos = *src;
+	u32 res = (((u32) pos[3]) << 24) | (pos[2] << 16) | (pos[1] << 8)
+			| (pos[0] << 0);
+	*src += 4;
+	return res;
+}
+
+static uint16_t
+read_u16(u8 **src)
+{
+	// beware of implicit promotion from uint8_t to signed int
+	// https://www.reddit.com/r/C_Programming/comments/bjuk3v/the_byte_order_fallacy/embbwq2/
+	u8 *pos = *src;
+	u16 res = ((uint16_t) (pos[1] << 8) | (pos[0] << 0));
+	*src += 2;
+	return res;
+}
+
+static uint16_t
+read_u8(u8 **src)
+{
+	// beware of implicit promotion from uint8_t to signed int
+	// https://www.reddit.com/r/C_Programming/comments/bjuk3v/the_byte_order_fallacy/embbwq2/
+	return *(*src)++;
+}
+
+
+typedef enum {
+	CK_NULL = 0x01,
+	CK_BOOLEAN = 0x06,
+	CK_INTEGER = 0x00,
+	CK_STRING = 0x02,
+	CK_METHOD = 0x03,
+	CK_SLOT = 0x04,
+	CK_CLASS = 0x05,
+} ConstantKind;
+
+typedef enum {
+	OP_LITERAL = 0x01,
+	OP_ARRAY = 0x03,
+	OP_OBJECT = 0x04,
+	OP_GET_LOCAL = 0x0A,
+	OP_SET_LOCAL = 0x09,
+	OP_GET_GLOBAL = 0x0C,
+	OP_SET_GLOBAL = 0x0B,
+	OP_GET_FIELD = 0x05,
+	OP_SET_FIELD = 0x06,
+	OP_LABEL = 0x00,
+	OP_JUMP = 0x0E,
+	OP_BRANCH = 0x0D,
+	OP_CALL_FUNCTION = 0x08,
+	OP_CALL_METHOD = 0x07,
+	OP_PRINT = 0x02,
+	OP_DROP = 0x10,
+	OP_RETURN = 0x0F,
+} OpCode;
+
+/*
+typedef struct {
+	u16 cnt;
+	size_t *index;
+	u8 *start;
+} ConstantPool;
+*/
+
+typedef struct {
+	u16 name;
+	u16 local_cnt;
+	u8 parameter_cnt;
+	u8 *instruction_start;
+	size_t instruction_len;
+} CMethod;
+
+typedef struct {
+	u16 *members;
+	size_t member_cnt;
+} Class;
+
+typedef struct {
+	ConstantKind kind;
+	union {
+		bool boolean;
+		i32 integer;
+		Identifier string;
+		u16 slot;
+		CMethod method;
+		Class class;
+	};
+} Constant;
+
+typedef struct {
+	Constant *constants;
+	size_t constant_cnt;
+	u16 *globals;
+	size_t global_cnt;
+	u16 entry_point;
+} Program;
+
+void
+read_constant(u8 **input, Constant *constant)
+{
+	ConstantKind kind = read_u8(input);
+	constant->kind = kind;
+	switch (kind) {
+	case CK_NULL:
+		break;
+	case CK_BOOLEAN: {
+		u8 b = read_u8(input);
+		assert(b <= 1);
+		constant->boolean = b == 1;
+		break;
+	}
+	case CK_INTEGER:
+		constant->integer = read_u32(input);
+		break;
+	case CK_STRING:
+		constant->string.len = read_u32(input);
+		constant->string.name = *input;
+		*input += constant->string.len;
+		break;
+	case CK_METHOD:
+		constant->method.name = read_u16(input);
+		constant->method.parameter_cnt = read_u8(input);
+		constant->method.local_cnt = read_u16(input);
+		u32 instruction_cnt = read_u32(input);
+		constant->method.instruction_start = *input;
+		for (size_t i = 0; i < instruction_cnt; i++) {
+			switch (read_u8(input)) {
+			case OP_LITERAL: *input += 2; break;
+			case OP_ARRAY: break;
+			case OP_OBJECT: *input += 2; break;
+			case OP_GET_LOCAL: *input += 2; break;
+			case OP_SET_LOCAL: *input += 2; break;
+			case OP_GET_GLOBAL: *input += 2; break;
+			case OP_SET_GLOBAL: *input += 2; break;
+			case OP_GET_FIELD: *input += 2; break;
+			case OP_SET_FIELD: *input += 2; break;
+			case OP_LABEL: *input += 2; break;
+			case OP_JUMP: *input += 2; break;
+			case OP_BRANCH: *input += 2; break;
+			case OP_CALL_FUNCTION: *input += 3; break;
+			case OP_CALL_METHOD: *input += 3; break;
+			case OP_PRINT: *input += 3; break;
+			case OP_DROP:  break;
+			case OP_RETURN: break;
+			}
+		}
+		constant->method.instruction_len = *input - constant->method.instruction_start;
+		break;
+	case CK_SLOT:
+		constant->slot = read_u16(input);
+		break;
+	case CK_CLASS: {
+		Class *class = &constant->class;
+		class->member_cnt = read_u16(input);
+		class->members = calloc(class->member_cnt, sizeof(*class->members));
+		for (size_t i = 0; i < class->member_cnt; i++) {
+			class->members[i] = read_u16(input);
+		}
+		break;
+	}
+	default:
+		assert(false);
+	}
+}
+
+bool
+read_program(Program *program, u8 *input, size_t input_len)
+{
+	assert(input_len >= 2);
+	program->constant_cnt = read_u16(&input);
+	program->constants = calloc(program->constant_cnt, sizeof(*program->constants));
+	for (size_t i = 0; i < program->constant_cnt; i++) {
+		read_constant(&input, &program->constants[i]);
+	}
+	program->global_cnt = read_u16(&input);
+	program->globals = calloc(program->global_cnt, sizeof(*program->globals));
+	for (size_t i = 0; i < program->global_cnt; i++) {
+		program->globals[i] = read_u16(&input);
+	}
+	program->entry_point = read_u16(&input);
+	return true;
+}
+
+typedef struct {
+	Program *program;
+	Value global;
+	Value *stack;
+	size_t stack_pos;
+	size_t stack_len;
+	Value *frame_stack;
+	size_t frame_stack_pos;
+	size_t frame_stack_len;
+	size_t bp;
+} VM;
+
+void
+vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
+{
+	Constant *method_constant = &vm->program->constants[method_index];
+	assert(method_constant->kind == CK_METHOD);
+	CMethod *method = &method_constant->method;
+	assert(argument_cnt == method->parameter_cnt);
+
+	size_t total_cnt = argument_cnt + method->local_cnt;
+	size_t saved_bp = vm->bp;
+	vm->bp = vm->frame_stack_pos;
+	vm->frame_stack_pos += total_cnt;
+
+	for (size_t i = 0; i < argument_cnt; i++) {
+		Value value = vm->stack[vm->stack_pos--];
+		vm->frame_stack[vm->bp + (argument_cnt - i)] = value;
+	}
+	for (size_t i = argument_cnt; i < total_cnt; i++) {
+		vm->frame_stack[vm->bp + (argument_cnt - i)] = make_null();
+	}
+
+	u8 *end = method->instruction_start + method->instruction_len;
+	for (u8 *ip = method->instruction_start; ip != end;) {
+		switch (read_u8(&ip)) {
+		case OP_LITERAL: {
+			u16 constant_index = read_u16(&ip);
+			Constant *constant = &vm->program->constants[constant_index];
+			Value value;
+			switch (constant->kind) {
+			case CK_NULL:
+				value = make_null();
+				break;
+			case CK_BOOLEAN:
+				value = make_boolean(constant->boolean);
+				break;
+			case CK_INTEGER:
+				value = make_integer(constant->integer);
+				break;
+			default:
+				assert(false);
+			}
+			vm->stack[++vm->stack_pos] = value;
+			break;
+		}
+		case OP_ARRAY: {
+			Value initializer = vm->stack[vm->stack_pos--];
+			Value size_value = vm->stack[vm->stack_pos--];
+			size_t size = value_as_index(size_value);
+			Value array_value = make_array(size);
+			Array *array = value_as_array(array_value);
+			for (size_t i = 0; i < size; i++) {
+				array->values[i] = initializer;
+			}
+			vm->stack[++vm->stack_pos] = array_value;
+			break;
+		}
+		case OP_OBJECT: {
+			u16 constant_index = read_u16(&ip);
+			Constant *constant = &vm->program->constants[constant_index];
+			assert(constant->kind == CK_CLASS);
+			assert(false);
+			break;
+		}
+		case OP_GET_LOCAL: {
+			u16 local_index = read_u16(&ip);
+			Value *lvalue = &vm->frame_stack[vm->bp + local_index];
+			vm->stack[++vm->stack_pos] = *lvalue;
+			break;
+		}
+		case OP_SET_LOCAL: {
+			u16 local_index = read_u16(&ip);
+			Value *lvalue = &vm->frame_stack[vm->bp + local_index];
+			*lvalue = vm->stack[vm->stack_pos];
+			break;
+		}
+		case OP_GET_GLOBAL: {
+			u16 constant_index = read_u16(&ip);
+			Constant *constant = &vm->program->constants[constant_index];
+			assert(constant->kind == CK_STRING);
+			Value *lvalue = value_field(vm->global, constant->string);
+			assert(lvalue);
+			vm->stack[++vm->stack_pos] = *lvalue;
+			break;
+		}
+		case OP_SET_GLOBAL: {
+			u16 constant_index = read_u16(&ip);
+			Constant *constant = &vm->program->constants[constant_index];
+			assert(constant->kind == CK_STRING);
+			Value *lvalue = value_field(vm->global, constant->string);
+			assert(lvalue);
+			*lvalue = vm->stack[vm->stack_pos];
+			break;
+		}
+		case OP_GET_FIELD: {
+			Value object = vm->stack[vm->stack_pos--];
+			u16 constant_index = read_u16(&ip);
+			Constant *constant = &vm->program->constants[constant_index];
+			assert(constant->kind == CK_STRING);
+			Value *lvalue = value_field(object, constant->string);
+			assert(lvalue);
+			vm->stack[++vm->stack_pos] = *lvalue;
+			break;
+		}
+		case OP_SET_FIELD: {
+			Value object = vm->stack[vm->stack_pos--];
+			u16 constant_index = read_u16(&ip);
+			Constant *constant = &vm->program->constants[constant_index];
+			assert(constant->kind == CK_STRING);
+			Value *lvalue = value_field(object, constant->string);
+			assert(lvalue);
+			*lvalue = vm->stack[vm->stack_pos];
+			break;
+		}
+		case OP_LABEL: {
+			break;
+		}
+		case OP_JUMP: {
+			u16 constant_index = read_u16(&ip);
+			Constant *constant = &vm->program->constants[constant_index];
+			assert(constant->kind == CK_STRING);
+			break;
+		}
+		case OP_BRANCH: {
+			u16 constant_index = read_u16(&ip);
+			Constant *constant = &vm->program->constants[constant_index];
+			assert(constant->kind == CK_STRING);
+			break;
+		}
+		case OP_CALL_FUNCTION: {
+			u16 constant_index = read_u16(&ip);
+			Constant *constant = &vm->program->constants[constant_index];
+			assert(constant->kind == CK_STRING);
+			Value object = vm->global;
+			Value method_value = *value_method(object, &object, constant->string);
+			u16 method_index = value_as_function_bc(method_value);
+			u8 argument_cnt = read_u8(&ip);
+			vm_call_method(vm, method_index, argument_cnt);
+			break;
+		}
+		case OP_CALL_METHOD: {
+			u16 constant_index = read_u16(&ip);
+			Constant *constant = &vm->program->constants[constant_index];
+			assert(constant->kind == CK_STRING);
+			Value *lobject = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
+			Value method_value = *value_method(*lobject, lobject, constant->string);
+			u16 method_index = value_as_function_bc(method_value);
+			u8 argument_cnt = read_u8(&ip);
+			vm_call_method(vm, method_index, argument_cnt);
+			break;
+		}
+		case OP_PRINT: {
+			u16 constant_index = read_u16(&ip);
+			Constant *constant = &vm->program->constants[constant_index];
+			assert(constant->kind == CK_STRING);
+			const u8 *format = constant->string.name;
+			size_t length = constant->string.len;
+			bool in_escape = false;
+
+			u8 argument_cnt = read_u8(&ip);
+			u8 arg_index = 0;
+			for (size_t i = 0; i < length; i++) {
+				u8 c = format[i];
+				if (in_escape) {
+					in_escape = false;
+					switch (c) {
+					case  'n': c = '\n'; break;
+					case  't': c = '\t'; break;
+					case  'r': c = '\r'; break;
+					case  '~': c =  '~'; break;
+					case  '"': c =  '"'; break;
+					case '\\': c = '\\'; break;
+					default:
+						fprintf(stderr, "invalid string escape sequence: %c", c);
+						assert(false);
+					}
+					putchar(c);
+				} else {
+					switch (c) {
+					case '\\': in_escape = true; break;
+					case '~':
+						assert(arg_index < argument_cnt);
+						value_print(vm->stack[vm->stack_pos - (argument_cnt - 1) + arg_index]);
+						arg_index += 1;
+						break;
+					default:
+						putchar(c);
+					}
+				}
+			}
+			vm->stack[++vm->stack_pos] = make_null();
+			break;
+		}
+		case OP_DROP: {
+			vm->stack_pos--;
+			break;
+		}
+		case OP_RETURN: {
+			vm->frame_stack_pos = vm->bp;
+			vm->bp = saved_bp;
+			return;
+		}
+		}
+	}
+}
+
 int
 main(int argc, char **argv) {
-	if(argc != 3 || strcmp(argv[1], "run") != 0) {
+	if(argc != 3) {
 		return 1;
 	}
 	FILE *f = fopen(argv[2], "rb");
 	fseek(f, 0, SEEK_END);
 	long fsize = ftell(f);
 	fseek(f, 0, SEEK_SET);
-	unsigned char *buf = malloc(fsize);
+	u8 *buf = malloc(fsize);
 	fread(buf, fsize, 1, f);
 	fclose(f);
 
@@ -1528,16 +1952,34 @@ main(int argc, char **argv) {
 	//		break;
 	//}
 
-	Ast *ast = parse(buf, fsize);
-	assert(ast);
+	if (strcmp(argv[1], "run") == 0) {
+		Ast *ast = parse(buf, fsize);
+		assert(ast);
 
-	InterpreterState is = {
-		.env = NULL,
-		.global_env = &is.env,
-		.in_global = true,
+		InterpreterState is = {
+			.env = NULL,
+			.global_env = &is.env,
+			.in_global = true,
 
-	};
-	interpret(&is, ast);
+		};
+		interpret(&is, ast);
+	} else if (strcmp(argv[1], "execute") == 0) {
+		Program program;
+		read_program(&program, buf, fsize);
+		VM vm = {
+			.program = &program,
+			.global = make_object(make_null(), 0),
+			.stack = calloc(1024, sizeof(Value)),
+			.stack_pos = -1,
+			.stack_len = 1024,
+			.frame_stack = calloc(1024, sizeof(Value)),
+			.frame_stack_pos = 0,
+			.frame_stack_len = 1024,
+			.bp = 0,
+		};
+		vm_call_method(&vm, program.entry_point, 0);
+	}
+
 
 	free(buf);
 	return 0;
