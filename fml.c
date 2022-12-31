@@ -1887,10 +1887,10 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 
 	for (size_t i = 0; i < argument_cnt; i++) {
 		Value value = vm->stack[vm->stack_pos--];
-		vm->frame_stack[vm->bp + (argument_cnt - i)] = value;
+		vm->frame_stack[vm->bp + (argument_cnt - 1 - i)] = value;
 	}
 	for (size_t i = argument_cnt; i < total_cnt; i++) {
-		vm->frame_stack[vm->bp + (argument_cnt - i)] = make_null();
+		vm->frame_stack[vm->bp + (argument_cnt - 1 - i)] = make_null();
 	}
 
 	u8 *end = method->instruction_start + method->instruction_len;
