@@ -878,7 +878,7 @@ typedef struct {
 	GcValue gcvalue;
 	size_t length;
 	Value values[];
-} Array ;
+} Array;
 
 typedef struct {
 	Identifier name;
@@ -927,20 +927,27 @@ make_array(size_t length)
 }
 
 Value
-make_object(Value parent, size_t field_cnt)
+make_object(size_t field_cnt)
 {
 	Object *object = malloc(sizeof(*object) + field_cnt * sizeof(object->fields[0]));
 	object->gcvalue = (GcValue) { .kind = GK_OBJECT };
-	object->parent = parent;
+	// NOTE: Caller has to set parent!
+	//object->parent = make_null();
 	object->field_cnt = field_cnt;
 
 	return (Value) { .kind = VK_GCVALUE, .gcvalue = &object->gcvalue };
 }
 
 Value
-make_function(Ast *ast)
+make_function_ast(Ast *ast)
 {
 	return (Value) { .kind = VK_FUNCTION, .function = ast };
+}
+
+Value
+make_function_bc(u16 function_index)
+{
+	return (Value) { .kind = VK_FUNCTION, .function_index = function_index };
 }
 
 bool
@@ -1323,8 +1330,9 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 	case AST_OBJECT: {
 		Value parent = interpret(is, ast->object.extends);
-		Value object_value = make_object(parent, ast->object.member_cnt);
+		Value object_value = make_object(ast->object.member_cnt);
 		Object *object = value_as_object(object_value);
+		object->parent = parent;
 		for (size_t i = 0; i < ast->object.member_cnt; i++) {
 			Ast *ast_member = ast->object.members[i];
 			switch (ast_member->kind) {
@@ -1334,7 +1342,7 @@ interpret(InterpreterState *is, Ast *ast)
 				break;
 			case AST_FUNCTION:
 				object->fields[i].name = ast_member->function.name;
-				object->fields[i].value = make_function(ast_member);
+				object->fields[i].value = make_function_ast(ast_member);
 				break;
 			default:
 				assert(false);
@@ -1343,7 +1351,7 @@ interpret(InterpreterState *is, Ast *ast)
 		return object_value;
 	}
 	case AST_FUNCTION: {
-		Value function = make_function(ast);
+		Value function = make_function_ast(ast);
 		is->env = make_env(is->env, ast->function.name, function);
 		return make_null();
 	}
@@ -1491,7 +1499,8 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 	if (function_call) {
 		function = env_lookup_func(*is->global_env, method);
 	} else {
-		function = value_as_function_ast(*value_method(object, &object, method));
+		Value *function_value = value_method(object, &object, method);
+		function = function_value ? value_as_function_ast(*function_value) : NULL;
 	}
 	if (function) {
 		assert(argument_cnt == function->function.parameter_cnt);
@@ -1586,14 +1595,6 @@ typedef enum {
 	OP_DROP = 0x10,
 	OP_RETURN = 0x0F,
 } OpCode;
-
-/*
-typedef struct {
-	u16 cnt;
-	size_t *index;
-	u8 *start;
-} ConstantPool;
-*/
 
 typedef struct {
 	u16 name;
@@ -1726,6 +1727,51 @@ typedef struct {
 	size_t bp;
 } VM;
 
+
+static Value
+make_null_vm(VM *vm)
+{
+	(void) vm;
+	return make_null();
+}
+
+static Value
+vm_pop_value(VM *vm)
+{
+	return vm->stack[vm->stack_pos--];
+}
+
+static Value
+vm_collect_members(VM *vm, u16 *members, size_t member_cnt, Value (*make_value)(VM *vm))
+{
+	Value object_value = make_object(member_cnt);
+	Object *object = value_as_object(object_value);
+	Constant *constants = vm->program->constants;
+	for (size_t i = 0; i < member_cnt; i++) {
+		Constant *constant = &constants[members[i]];
+		switch (constant->kind) {
+		case CK_SLOT: {
+			Constant *name = &constants[constant->slot];
+			assert(name->kind == CK_STRING);
+			object->fields[i].name = name->string;
+			object->fields[i].value = make_value(vm);
+			break;
+		}
+		case CK_METHOD: {
+			Constant *name = &constants[constant->method.name];
+			assert(name->kind == CK_STRING);
+			object->fields[i].name = name->string;
+			object->fields[i].value = make_function_bc(members[i]);
+			break;
+		}
+		default:
+			assert(false);
+		}
+	}
+	object->parent = make_value(vm);
+	return object_value;
+}
+
 void
 vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 {
@@ -1786,7 +1832,9 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			u16 constant_index = read_u16(&ip);
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_CLASS);
-			assert(false);
+			Class *class = &constant->class;
+			Value object = vm_collect_members(vm, class->members, class->member_cnt, vm_pop_value);
+			vm->stack[++vm->stack_pos] = object;
 			break;
 		}
 		case OP_GET_LOCAL: {
@@ -1859,8 +1907,9 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_STRING);
 			Value object = vm->global;
-			Value method_value = *value_method(object, &object, constant->string);
-			u16 method_index = value_as_function_bc(method_value);
+			Value *method_value = value_method(object, &object, constant->string);
+			assert(method_value);
+			u16 method_index = value_as_function_bc(*method_value);
 			u8 argument_cnt = read_u8(&ip);
 			vm_call_method(vm, method_index, argument_cnt);
 			break;
@@ -1870,8 +1919,9 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_STRING);
 			Value *lobject = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
-			Value method_value = *value_method(*lobject, lobject, constant->string);
-			u16 method_index = value_as_function_bc(method_value);
+			Value *method_value = value_method(*lobject, lobject, constant->string);
+			assert(method_value);
+			u16 method_index = value_as_function_bc(*method_value);
 			u8 argument_cnt = read_u8(&ip);
 			vm_call_method(vm, method_index, argument_cnt);
 			break;
@@ -1968,7 +2018,7 @@ main(int argc, char **argv) {
 		read_program(&program, buf, fsize);
 		VM vm = {
 			.program = &program,
-			.global = make_object(make_null(), 0),
+			.global = make_null(),
 			.stack = calloc(1024, sizeof(Value)),
 			.stack_pos = -1,
 			.stack_len = 1024,
@@ -1977,6 +2027,7 @@ main(int argc, char **argv) {
 			.frame_stack_len = 1024,
 			.bp = 0,
 		};
+		vm.global = vm_collect_members(&vm, program.globals, program.global_cnt, make_null_vm);
 		vm_call_method(&vm, program.entry_point, 0);
 	}
 
