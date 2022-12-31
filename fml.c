@@ -1534,14 +1534,15 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 	return return_value;
 }
 
+// Parse little endian numbers from byte array.Beware of implicit promotion from uint8_t to signed int.
+// https://commandcenter.blogspot.com/2012/04/byte-order-fallacy.html
+// https://www.reddit.com/r/C_Programming/comments/bjuk3v/the_byte_order_fallacy/embbwq2/
+
 static u32
 read_u32(u8 **src)
 {
-	// beware of implicit promotion from uint8_t to signed int
-	// https://www.reddit.com/r/C_Programming/comments/bjuk3v/the_byte_order_fallacy/embbwq2/
 	u8 *pos = *src;
-	u32 res = (((u32) pos[3]) << 24) | (pos[2] << 16) | (pos[1] << 8)
-			| (pos[0] << 0);
+	u32 res = (((u32) pos[3]) << 24) | (pos[2] << 16) | (pos[1] << 8) | (pos[0] << 0);
 	*src += 4;
 	return res;
 }
@@ -1549,19 +1550,15 @@ read_u32(u8 **src)
 static uint16_t
 read_u16(u8 **src)
 {
-	// beware of implicit promotion from uint8_t to signed int
-	// https://www.reddit.com/r/C_Programming/comments/bjuk3v/the_byte_order_fallacy/embbwq2/
 	u8 *pos = *src;
 	u16 res = ((uint16_t) (pos[1] << 8) | (pos[0] << 0));
 	*src += 2;
 	return res;
 }
 
-static uint16_t
+static uint8_t
 read_u8(u8 **src)
 {
-	// beware of implicit promotion from uint8_t to signed int
-	// https://www.reddit.com/r/C_Programming/comments/bjuk3v/the_byte_order_fallacy/embbwq2/
 	return *(*src)++;
 }
 
@@ -1965,6 +1962,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 					}
 				}
 			}
+			vm->stack_pos -= argument_cnt;
 			vm->stack[++vm->stack_pos] = make_null();
 			break;
 		}
@@ -1973,12 +1971,13 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_RETURN: {
-			vm->frame_stack_pos = vm->bp;
-			vm->bp = saved_bp;
-			return;
+			goto end;
 		}
 		}
 	}
+end:
+	vm->frame_stack_pos = vm->bp;
+	vm->bp = saved_bp;
 }
 
 int
