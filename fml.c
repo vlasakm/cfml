@@ -296,6 +296,18 @@ ident_cmp(Identifier a, Identifier b)
 	return a.len == b.len && memcmp(a.name, b.name, a.len) == 0;
 }
 
+u64
+ident_hash(Identifier id)
+{
+    u64 h = UINT64_C(14695981039346656037);
+    for (size_t i = 0; i < id.len; i++) {
+	// beware of unwanted sign extension!
+        h ^= id.name[i];
+        h *= UINT64_C(1099511628211);
+    }
+    return h;
+}
+
 static Identifier THIS  = { .name = (const u8*) "this", .len = 4 };
 static Identifier SET   = { .name = (const u8*)  "set", .len = 3 };
 static Identifier GET   = { .name = (const u8*)  "get", .len = 3 };
@@ -1534,6 +1546,96 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 	return return_value;
 }
 
+typedef struct {
+	Identifier key;
+	Value value;
+} Entry;
+
+typedef struct {
+	Entry *entries;
+	size_t entry_cnt;
+	size_t capacity;
+} Table;
+
+void
+table_init(Table *table, size_t capacity)
+{
+	table->entry_cnt = 0;
+	if (capacity == 0) {
+		table->capacity = 0;
+		table->entries = NULL;
+	} else {
+		table->capacity = 1;
+		while (table->capacity < capacity) {
+			table->capacity *= 2;
+		}
+		table->entries = calloc(table->capacity, sizeof(*table->entries));
+	}
+}
+
+Entry *
+table_find_entry(Entry *entries, size_t capacity, Identifier key)
+{
+	u64 hash = ident_hash(key);
+	// NOTE: We guarantee that the capacity is a power of two. The modulo
+	// operation thus simplifies to simple binary AND.
+	size_t mask = capacity - 1;
+	for (size_t index = hash & mask;; index = (index + 1) & mask) {
+		Entry *entry = &entries[index];
+		if (entry->key.name == NULL || ident_cmp(entry->key, key)) {
+			return entry;
+		}
+	}
+}
+
+void
+table_grow(Table *table)
+{
+	size_t capacity = table->capacity ? table->capacity * 2 : 8;
+	// TODO: intialize memory if not zero allocated
+	Entry *entries = calloc(capacity, sizeof(*entries));
+	for (size_t i = 0; i < table->capacity; i++) {
+		Entry *old = &table->entries[i];
+		if (old->key.name == NULL) {
+			continue;
+		}
+		Entry *new = table_find_entry(entries, capacity, old->key);
+		*new = *old;
+	}
+	free(table->entries);
+	table->entries = entries;
+	table->capacity = capacity;
+}
+
+bool
+table_get(Table *table, Identifier key, Value *value)
+{
+	Entry *entry = table_find_entry(table->entries, table->capacity, key);
+	if (entry->key.name == NULL) {
+		return false;
+	}
+	*value = entry->value;
+	return true;
+}
+
+bool
+table_insert(Table *table, Identifier key, Value value)
+{
+	if (table->entry_cnt + 1 >= table->capacity / 2) {
+		table_grow(table);
+	}
+	Entry *entry = table_find_entry(table->entries, table->capacity, key);
+	bool new = entry->key.name == NULL;
+	if (new) {
+		table->entry_cnt += 1;
+		entry->key = key;
+	}
+	entry->value = value;
+	return new;
+}
+
+
+
 // Parse little endian numbers from byte array.Beware of implicit promotion from uint8_t to signed int.
 // https://commandcenter.blogspot.com/2012/04/byte-order-fallacy.html
 // https://www.reddit.com/r/C_Programming/comments/bjuk3v/the_byte_order_fallacy/embbwq2/
@@ -1714,6 +1816,7 @@ read_program(Program *program, u8 *input, size_t input_len)
 
 typedef struct {
 	Program *program;
+	Table label_offsets;
 	Value global;
 	Value *stack;
 	size_t stack_pos;
@@ -1885,18 +1988,30 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_LABEL: {
+			read_u16(&ip);
 			break;
 		}
 		case OP_JUMP: {
 			u16 constant_index = read_u16(&ip);
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_STRING);
+			Value offset_value;
+			assert(table_get(&vm->label_offsets, constant->string, &offset_value));
+			int32_t offset = value_as_integer(offset_value);
+			ip = method->instruction_start + offset;
 			break;
 		}
 		case OP_BRANCH: {
 			u16 constant_index = read_u16(&ip);
-			Constant *constant = &vm->program->constants[constant_index];
-			assert(constant->kind == CK_STRING);
+			Value condition = vm->stack[vm->stack_pos--];
+			if (value_to_bool(condition)) {
+				Constant *constant = &vm->program->constants[constant_index];
+				assert(constant->kind == CK_STRING);
+				Value offset_value;
+				assert(table_get(&vm->label_offsets, constant->string, &offset_value));
+				int32_t offset = value_as_integer(offset_value);
+				ip = method->instruction_start + offset;
+			}
 			break;
 		}
 		case OP_CALL_FUNCTION: {
@@ -2015,8 +2130,49 @@ main(int argc, char **argv) {
 	} else if (strcmp(argv[1], "execute") == 0) {
 		Program program;
 		read_program(&program, buf, fsize);
+		Table label_offsets;
+		table_init(&label_offsets, 0);
+		for (size_t i = 0; i < program.constant_cnt; i++) {
+			if (program.constants[i].kind == CK_METHOD) {
+				CMethod *method = &program.constants[i].method;
+				u8 *start = method->instruction_start;
+				u8 *end = start + method->instruction_len;
+				u8 *ip = start;
+				while (ip != end) {
+					switch (*ip++) {
+					case OP_LITERAL: ip += 2; break;
+					case OP_ARRAY: break;
+					case OP_OBJECT: ip += 2; break;
+					case OP_GET_LOCAL: ip += 2; break;
+					case OP_SET_LOCAL: ip += 2; break;
+					case OP_GET_GLOBAL: ip += 2; break;
+					case OP_SET_GLOBAL: ip += 2; break;
+					case OP_GET_FIELD: ip += 2; break;
+					case OP_SET_FIELD: ip += 2; break;
+					case OP_LABEL: {
+						size_t offset = ip - 1 - start;
+						u16 label_index = read_u16(&ip);
+						Constant *label_const = &program.constants[label_index];
+						assert(label_const->kind == CK_STRING);
+						Identifier label = label_const->string;
+						assert(table_insert(&label_offsets, label, make_integer(offset)));
+						break;
+					}
+					case OP_JUMP: ip += 2; break;
+					case OP_BRANCH: ip += 2; break;
+					case OP_CALL_FUNCTION: ip += 3; break;
+					case OP_CALL_METHOD: ip += 3; break;
+					case OP_PRINT: ip += 3; break;
+					case OP_DROP:  break;
+					case OP_RETURN: break;
+					}
+				}
+
+			}
+		}
 		VM vm = {
 			.program = &program,
+			.label_offsets = label_offsets,
 			.global = make_null(),
 			.stack = calloc(1024, sizeof(Value)),
 			.stack_pos = -1,
