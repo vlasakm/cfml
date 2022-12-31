@@ -1847,7 +1847,7 @@ vm_collect_members(VM *vm, u16 *members, size_t member_cnt, Value (*make_value)(
 	Value object_value = make_object(member_cnt);
 	Object *object = value_as_object(object_value);
 	Constant *constants = vm->program->constants;
-	for (size_t i = 0; i < member_cnt; i++) {
+	for (size_t i = member_cnt; i--;) {
 		Constant *constant = &constants[members[i]];
 		switch (constant->kind) {
 		case CK_SLOT: {
@@ -1978,13 +1978,15 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_SET_FIELD: {
+			Value value = vm->stack[vm->stack_pos--];
 			Value object = vm->stack[vm->stack_pos--];
 			u16 constant_index = read_u16(&ip);
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_STRING);
 			Value *lvalue = value_field(object, constant->string);
 			assert(lvalue);
-			*lvalue = vm->stack[vm->stack_pos];
+			*lvalue = value;
+			vm->stack[++vm->stack_pos] = value;
 			break;
 		}
 		case OP_LABEL: {
@@ -2028,14 +2030,20 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		}
 		case OP_CALL_METHOD: {
 			u16 constant_index = read_u16(&ip);
+			u8 argument_cnt = read_u8(&ip);
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_STRING);
 			Value *lobject = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
 			Value *method_value = value_method(*lobject, lobject, constant->string);
-			assert(method_value);
-			u16 method_index = value_as_function_bc(*method_value);
-			u8 argument_cnt = read_u8(&ip);
-			vm_call_method(vm, method_index, argument_cnt);
+			if (method_value) {
+				u16 method_index = value_as_function_bc(*method_value);
+				vm_call_method(vm, method_index, argument_cnt);
+			} else {
+				Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 2)];
+				Value return_value = value_call_primitive_method(*lobject, constant->string, arguments, argument_cnt - 1);
+				vm->stack_pos -= argument_cnt;
+				vm->stack[++vm->stack_pos] = return_value;
+			}
 			break;
 		}
 		case OP_PRINT: {
