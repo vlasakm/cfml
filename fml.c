@@ -1763,6 +1763,17 @@ typedef struct {
 	u16 entry_point;
 } Program;
 
+u8 *
+read_class(u8 **input)
+{
+	u8 *class_start = *input;
+	size_t member_cnt = read_u16(input);
+	for (size_t i = 0; i < member_cnt; i++) {
+		read_u16(input);
+	}
+	return class_start;
+}
+
 void
 read_constant(u8 **input, Constant *constant)
 {
@@ -1778,7 +1789,7 @@ read_constant(u8 **input, Constant *constant)
 		break;
 	}
 	case CK_INTEGER:
-		constant->integer = read_u32(input);
+		constant->integer = (i32) read_u32(input);
 		break;
 	case CK_STRING:
 		constant->string.len = read_u32(input);
@@ -1819,9 +1830,7 @@ read_constant(u8 **input, Constant *constant)
 		break;
 	case CK_CLASS: {
 		Class *class = &constant->class;
-		class->start = *input;
-		size_t member_cnt = read_u16(input);
-		*input += 2 * member_cnt;
+		class->start = read_class(input);
 		break;
 	}
 	default:
@@ -1838,9 +1847,7 @@ read_program(Program *program, u8 *input, size_t input_len)
 	for (size_t i = 0; i < program->constant_cnt; i++) {
 		read_constant(&input, &program->constants[i]);
 	}
-	program->global_class = input;
-	size_t global_cnt = read_u16(&input);
-	input += 2 * global_cnt;
+	program->global_class = read_class(&input);
 	program->entry_point = read_u16(&input);
 	return true;
 }
@@ -1898,7 +1905,7 @@ vm_instantiate_class(VM *vm, u8 *class, Value (*make_value)(VM *vm))
 			Constant *name = &constants[constant->method.name];
 			assert(name->kind == CK_STRING);
 			object->fields[i].name = name->string;
-			object->fields[i].value = make_function_bc(members[i]);
+			object->fields[i].value = make_function_bc(constant_index);
 			break;
 		}
 		default:
