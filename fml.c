@@ -1879,6 +1879,15 @@ vm_pop_value(VM *vm)
 	return vm->stack[vm->stack_pos--];
 }
 
+static Identifier
+constant_string(VM * vm, u8 **ip)
+{
+	u16 constant_index = read_u16(ip);
+	Constant *constant = &vm->program->constants[constant_index];
+	assert(constant->kind == CK_STRING);
+	return constant->string;
+}
+
 static Value
 vm_instantiate_class(VM *vm, u8 *class, Value (*make_value)(VM *vm))
 {
@@ -1995,40 +2004,32 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_GET_GLOBAL: {
-			u16 constant_index = read_u16(&ip);
-			Constant *constant = &vm->program->constants[constant_index];
-			assert(constant->kind == CK_STRING);
-			Value *lvalue = value_field(vm->global, constant->string);
+			Identifier name = constant_string(vm, &ip);
+			Value *lvalue = value_field(vm->global, name);
 			assert(lvalue);
 			vm->stack[++vm->stack_pos] = *lvalue;
 			break;
 		}
 		case OP_SET_GLOBAL: {
-			u16 constant_index = read_u16(&ip);
-			Constant *constant = &vm->program->constants[constant_index];
-			assert(constant->kind == CK_STRING);
-			Value *lvalue = value_field(vm->global, constant->string);
+			Identifier name = constant_string(vm, &ip);
+			Value *lvalue = value_field(vm->global, name);
 			assert(lvalue);
 			*lvalue = vm->stack[vm->stack_pos];
 			break;
 		}
 		case OP_GET_FIELD: {
-			u16 constant_index = read_u16(&ip);
+			Identifier name = constant_string(vm, &ip);
 			Value object = vm->stack[vm->stack_pos--];
-			Constant *constant = &vm->program->constants[constant_index];
-			assert(constant->kind == CK_STRING);
-			Value *lvalue = value_field(object, constant->string);
+			Value *lvalue = value_field(object, name);
 			assert(lvalue);
 			vm->stack[++vm->stack_pos] = *lvalue;
 			break;
 		}
 		case OP_SET_FIELD: {
-			u16 constant_index = read_u16(&ip);
+			Identifier name = constant_string(vm, &ip);
 			Value value = vm->stack[vm->stack_pos--];
 			Value object = vm->stack[vm->stack_pos--];
-			Constant *constant = &vm->program->constants[constant_index];
-			assert(constant->kind == CK_STRING);
-			Value *lvalue = value_field(object, constant->string);
+			Value *lvalue = value_field(object, name);
 			assert(lvalue);
 			*lvalue = value;
 			vm->stack[++vm->stack_pos] = value;
@@ -2039,65 +2040,55 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_JUMP: {
-			u16 constant_index = read_u16(&ip);
-			Constant *constant = &vm->program->constants[constant_index];
-			assert(constant->kind == CK_STRING);
+			Identifier name = constant_string(vm, &ip);
 			Value offset_value;
-			assert(table_get(&vm->label_offsets, constant->string, &offset_value));
+			assert(table_get(&vm->label_offsets, name, &offset_value));
 			int32_t offset = value_as_integer(offset_value);
 			ip = method->instruction_start + offset;
 			break;
 		}
 		case OP_BRANCH: {
-			u16 constant_index = read_u16(&ip);
+			Identifier name = constant_string(vm, &ip);
 			Value condition = vm->stack[vm->stack_pos--];
 			if (value_to_bool(condition)) {
-				Constant *constant = &vm->program->constants[constant_index];
-				assert(constant->kind == CK_STRING);
 				Value offset_value;
-				assert(table_get(&vm->label_offsets, constant->string, &offset_value));
+				assert(table_get(&vm->label_offsets, name, &offset_value));
 				int32_t offset = value_as_integer(offset_value);
 				ip = method->instruction_start + offset;
 			}
 			break;
 		}
 		case OP_CALL_FUNCTION: {
-			u16 constant_index = read_u16(&ip);
+			Identifier name = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
-			Constant *constant = &vm->program->constants[constant_index];
-			assert(constant->kind == CK_STRING);
 			Value object = vm->global;
-			Value *method_value = value_method(object, &object, constant->string);
+			Value *method_value = value_method(object, &object, name);
 			assert(method_value);
 			u16 method_index = value_as_function_bc(*method_value);
 			vm_call_method(vm, method_index, argument_cnt);
 			break;
 		}
 		case OP_CALL_METHOD: {
-			u16 constant_index = read_u16(&ip);
+			Identifier name = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
-			Constant *constant = &vm->program->constants[constant_index];
-			assert(constant->kind == CK_STRING);
 			Value *lobject = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
-			Value *method_value = value_method(*lobject, lobject, constant->string);
+			Value *method_value = value_method(*lobject, lobject, name);
 			if (method_value) {
 				u16 method_index = value_as_function_bc(*method_value);
 				vm_call_method(vm, method_index, argument_cnt);
 			} else {
 				Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 2)];
-				Value return_value = value_call_primitive_method(*lobject, constant->string, arguments, argument_cnt - 1);
+				Value return_value = value_call_primitive_method(*lobject, name, arguments, argument_cnt - 1);
 				vm->stack_pos -= argument_cnt;
 				vm->stack[++vm->stack_pos] = return_value;
 			}
 			break;
 		}
 		case OP_PRINT: {
-			u16 constant_index = read_u16(&ip);
+			Identifier format_string = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
-			Constant *constant = &vm->program->constants[constant_index];
-			assert(constant->kind == CK_STRING);
 			Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
-			builtin_print(constant->string, arguments, argument_cnt);
+			builtin_print(format_string, arguments, argument_cnt);
 			vm->stack_pos -= argument_cnt;
 			vm->stack[++vm->stack_pos] = make_null();
 			break;
