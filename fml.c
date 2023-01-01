@@ -204,11 +204,17 @@ lex_next(Lexer *lexer, Token *token)
 				break;
 		}; break;
 		case LS_BLOCK_COMMENT: switch (c) {
-			// TODO: handle \n
+			case '\n':
+				lexer->line_start = lexer->pos + 1;
+				lexer->line_num += 1;
+				break;
 			case '*': state = LS_BLOCK_COMMENT_STAR; break;
 		}; break;
 		case LS_BLOCK_COMMENT_STAR: switch (c) {
-			// TODO: handle \n
+			case '\n':
+				lexer->line_start = lexer->pos + 1;
+				lexer->line_num += 1;
+				break;
 			case '*': break;
 			case '/': state = LS_START; start = lexer->pos + 1; break;
 			default: state = LS_BLOCK_COMMENT; break;
