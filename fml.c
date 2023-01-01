@@ -291,7 +291,7 @@ typedef struct {
 } Identifier;
 
 bool
-ident_cmp(Identifier a, Identifier b)
+ident_eq(Identifier a, Identifier b)
 {
 	return a.len == b.len && memcmp(a.name, b.name, a.len) == 0;
 }
@@ -1040,6 +1040,14 @@ value_as_function_bc(Value value)
 	return (u16) value.function_index;
 }
 
+static int
+ident_cmp(Identifier a, Identifier b)
+{
+	int cmp = memcmp(a.name, b.name, a.len < b.len ? a.len : b.len);
+	return cmp == 0 ? (a.len > b.len) - (b.len > a.len) : cmp;
+}
+
+
 void
 value_print(Value value)
 {
@@ -1077,20 +1085,35 @@ value_print(Value value)
 				value_print(parent);
 				prev = true;
 			}
+			Field *fields = calloc(object->field_cnt, sizeof(*fields));
+			size_t field_cnt = 0;
 			for (size_t i = 0; i < object->field_cnt; i++) {
 				if (value_is_function(object->fields[i].value)) {
 					continue;
 				}
+				fields[field_cnt] = object->fields[i];
+				field_cnt += 1;
+			}
+
+			for (size_t i = 0; i < field_cnt; i++) {
+				for (size_t j = i; j > 0 && ident_cmp(fields[j - 1].name, fields[j].name) > 0; j--) {
+					Field tmp = fields[j - 1];
+					fields[j - 1] = fields[j];
+					fields[j] = tmp;
+				}
+			}
+
+			for (size_t i = 0; i < field_cnt; i++) {
 				if (prev) {
-					prev = false;
 					printf(", ");
 				}
-				Identifier name = object->fields[i].name;
+				Identifier name = fields[i].name;
 				printf("%.*s=", (int)name.len, name.name);
-				value_print(object->fields[i].value);
+				value_print(fields[i].value);
 				prev = true;
 			}
 			printf(")");
+			free(fields);
 			break;
 		}
 		break;
@@ -1152,7 +1175,7 @@ value_field(Value value, Identifier name)
 		if (value_is_function(object->fields[i].value)) {
 			continue;
 		}
-		if (ident_cmp(field_name, name)) {
+		if (ident_eq(field_name, name)) {
 			return &object->fields[i].value;
 		}
 	}
@@ -1174,7 +1197,7 @@ value_method(Value value, Value *receiver, Identifier name)
 		if (!value_is_function(object->fields[i].value)) {
 			continue;
 		}
-		if (ident_cmp(field_name, name)) {
+		if (ident_eq(field_name, name)) {
 			// We found the method, set the receiver Object to the
 			// method's owner
 			receiver->gcvalue = &object->gcvalue;
@@ -1280,7 +1303,7 @@ env_lookup_raw(Environment *env, Identifier name)
 	if (!env) {
 		return NULL;
 	}
-	if (ident_cmp(env->name, name)) {
+	if (ident_eq(env->name, name)) {
 		return &env->value;
 	}
 	return env_lookup_raw(env->prev, name);
@@ -1582,7 +1605,7 @@ table_find_entry(Entry *entries, size_t capacity, Identifier key)
 	size_t mask = capacity - 1;
 	for (size_t index = hash & mask;; index = (index + 1) & mask) {
 		Entry *entry = &entries[index];
-		if (entry->key.name == NULL || ident_cmp(entry->key, key)) {
+		if (entry->key.name == NULL || ident_eq(entry->key, key)) {
 			return entry;
 		}
 	}
