@@ -330,53 +330,171 @@ static Identifier SET   = { .name = (const u8*)  "set", .len = 3 };
 static Identifier GET   = { .name = (const u8*)  "get", .len = 3 };
 static Identifier EMPTY = { .name = (const u8*)     "", .len = 0 };
 
-#define ASTS(_) \
-	_(AST_NULL,                null,                AstNull,               { int _dummy; }) \
-	_(AST_BOOLEAN,             boolean,             AstBoolean,            { bool value; }) \
-	_(AST_INTEGER,             integer,             AstInteger,            { i32 value; }) \
-	\
-	_(AST_ARRAY,               array,               AstArray,              { Ast *size; Ast *initializer; }) \
-	_(AST_OBJECT,              object,              AstObject,             { Ast *extends; Ast **members; size_t member_cnt; }) \
-	\
-	_(AST_VARIABLE,            variable,            AstVariable,           { Identifier name; Ast *value; }) \
-	_(AST_FUNCTION,            function,            AstFunction,           { Identifier name; Identifier *parameters; size_t parameter_cnt; Ast *body; }) \
-	\
-	_(AST_VARIABLE_ACCESS,     variable_access,     AstVariableAccess,     { Identifier name; }) \
-	_(AST_VARIABLE_ASSIGNMENT, variable_assignment, AstVariableAssignment, { Identifier name; Ast *value; }) \
-	\
-	_(AST_INDEX_ACCESS,        index_access,        AstIndexAccess,        { Ast *object; Ast *index; }) \
-	_(AST_INDEX_ASSIGNMENT,    index_assignment,    AstIndexAssignment,    { Ast *object; Ast *index; Ast *value; }) \
-	\
-	_(AST_FIELD_ACCESS,        field_access,        AstFieldAccess,        { Ast *object; Identifier field; }) \
-	_(AST_FIELD_ASSIGNMENT,    field_assignment,    AstFieldAssignment,    { Ast *object; Identifier field; Ast *value; }) \
-	\
-	_(AST_FUNCTION_CALL,       function_call,       AstFunctionCall,       { Identifier name; Ast **arguments; size_t argument_cnt; }) \
-	_(AST_METHOD_CALL,         method_call,         AstMethodCall,         { Ast* object; Identifier name; Ast **arguments; size_t argument_cnt; }) \
-	\
-	_(AST_IF,                  conditional,         AstConditional,        { Ast *condition; Ast *consequent; Ast *alternative; }) \
-	_(AST_WHILE,               loop,                AstLoop,               { Ast *condition; Ast *body; }) \
-	_(AST_PRINT,               print,               AstPrint,              { Identifier format; Ast **arguments; size_t argument_cnt; }) \
-	_(AST_BLOCK,               block,               AstBlock,              { Ast **expressions; size_t expression_cnt; }) \
-
 typedef enum {
-	#define AST_KIND(ast_kind, ...) ast_kind,
-	ASTS(AST_KIND)
-	#undef AST_KIND
+	AST_NULL,
+	AST_BOOLEAN,
+	AST_INTEGER,
+	AST_ARRAY,
+	AST_OBJECT,
+	AST_VARIABLE,
+	AST_FUNCTION,
+	AST_VARIABLE_ACCESS,
+	AST_VARIABLE_ASSIGNMENT,
+	AST_INDEX_ACCESS,
+	AST_INDEX_ASSIGNMENT,
+	AST_FIELD_ACCESS,
+	AST_FIELD_ASSIGNMENT,
+	AST_FUNCTION_CALL,
+	AST_METHOD_CALL,
+	AST_IF,
+	AST_WHILE,
+	AST_PRINT,
+	AST_BLOCK,
 } AstKind;
 
-typedef struct Ast Ast;
+#define AST_COMMON_FIELDS \
+		AstKind kind;
+		//Ast *next;
 
-#define AST_TYPE(ast_kind, field_name, type_name, fields) typedef struct fields type_name;
-ASTS(AST_TYPE)
-#undef AST_TYPE
+typedef union Ast Ast;
 
-struct Ast {
-	AstKind kind;
-	union {
-		#define AST_VARIANT(ast_kind, field_name, type_name, fields) type_name field_name;
-		ASTS(AST_VARIANT)
-		#undef AST_VARIANT
+typedef struct {
+	AST_COMMON_FIELDS
+	_Bool value;
+} AstBoolean;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	i32 value;
+} AstInteger;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Ast *size;
+	Ast *initializer;
+} AstArray;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Ast *extends;
+	Ast **members;
+	size_t member_cnt;
+} AstObject;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Identifier name;
+	Ast *value;
+} AstVariable;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Identifier name;
+	Identifier *parameters;
+	size_t parameter_cnt;
+	Ast *body;
+} AstFunction;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Identifier name;
+} AstVariableAccess;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Identifier name;
+	Ast *value;
+} AstVariableAssignment;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Ast *object;
+	Ast *index;
+} AstIndexAccess;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Ast *object;
+	Ast *index;
+	Ast *value;
+} AstIndexAssignment;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Ast *object;
+	Identifier field;
+} AstFieldAccess;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Ast *object;
+	Identifier field;
+	Ast *value;
+} AstFieldAssignment;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Identifier name;
+	Ast **arguments;
+	size_t argument_cnt;
+} AstFunctionCall;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Ast* object;
+	Identifier name;
+	Ast **arguments;
+	size_t argument_cnt;
+} AstMethodCall;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Ast *condition;
+	Ast *consequent;
+	Ast *alternative;
+} AstConditional;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Ast *condition;
+	Ast *body;
+} AstLoop;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Identifier format;
+	Ast **arguments;
+	size_t argument_cnt;
+} AstPrint;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Ast **expressions;
+	size_t expression_cnt;
+} AstBlock;
+
+union Ast {
+	struct {
+		AST_COMMON_FIELDS
 	};
+	AstBoolean boolean;
+	AstInteger integer;
+	AstArray array;
+	AstObject object;
+	AstVariable variable;
+	AstFunction function;
+	AstVariableAccess variable_access;
+	AstVariableAssignment variable_assignment;
+	AstIndexAccess index_access;
+	AstIndexAssignment index_assignment;
+	AstFieldAccess field_access;
+	AstFieldAssignment field_assignment;
+	AstFunctionCall function_call;
+	AstMethodCall method_call;
+	AstConditional conditional;
+	AstLoop loop;
+	AstPrint print;
+	AstBlock block;
 };
 
 typedef struct {
@@ -453,18 +571,22 @@ try_eat(Parser *parser, TokenKind kind)
 }
 
 static Ast *
-make_ast(AstKind kind)
+ast_create(AstKind kind, size_t size)
 {
-	Ast *ast = calloc(1, sizeof(*ast));
+	(void) size;
+	Ast *ast = calloc(1, sizeof(Ast));
 	ast->kind = kind;
 	return ast;
 }
 
+#define AST_CREATE(type, ident, kind) type *ident = (type *) ast_create(kind, sizeof(type))
+
 static Ast *
 create_null(Parser *parser)
 {
+	AST_CREATE(Ast, ast, AST_NULL);
 	(void) parser;
-	return make_ast(AST_NULL);
+	return ast;
 }
 
 #define TRY(arg) do { if (!(arg)) { return NULL; } } while(0)
@@ -533,7 +655,7 @@ identifier_list(Parser *parser, Identifier **list, size_t *n, TokenKind separato
 static Ast *
 primary(Parser *parser)
 {
-	Ast *ast = make_ast(AST_NULL);
+	AST_CREATE(Ast, ast, AST_NULL);
 	Token token = discard(parser);
 	switch (token.kind) {
 	case TK_NUMBER:
@@ -573,52 +695,48 @@ primary(Parser *parser)
 static Ast *
 ident(Parser *parser)
 {
-	Ast *ast = make_ast(AST_VARIABLE_ACCESS);
-	TRY(eat_identifier(parser, &ast->variable_access.name));
-	return ast;
+	AST_CREATE(AstVariableAccess, variable_access, AST_VARIABLE_ACCESS);
+	TRY(eat_identifier(parser, &variable_access->name));
+	return (Ast *) variable_access;
 }
 
 static Ast *
 block(Parser *parser)
 {
-	Ast *ast = make_ast(AST_BLOCK);
-	AstBlock *block = &ast->block;
+	AST_CREATE(AstBlock, block, AST_BLOCK);
 	TRY(eat(parser, TK_BEGIN));
 	TRY(expression_list(parser, &block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_END));
-	return ast;
+	return (Ast *) block;
 }
 
 static Ast *
 let(Parser *parser)
 {
-	Ast *ast = make_ast(AST_VARIABLE);
-	AstVariable *variable = &ast->variable;
+	AST_CREATE(AstVariable, variable, AST_VARIABLE);
 	TRY(eat(parser, TK_LET));
 	TRY(eat_identifier(parser, &variable->name));
 	TRY(eat(parser, TK_EQUAL));
 	TRY(variable->value = expression(parser));
-	return ast;
+	return (Ast *) variable;
 }
 
 static Ast *
 array(Parser *parser)
 {
-	Ast *ast = make_ast(AST_ARRAY);
-	AstArray *array = &ast->array;
+	AST_CREATE(AstArray, array, AST_ARRAY);
 	TRY(eat(parser, TK_ARRAY));
 	TRY(eat(parser, TK_LPAREN));
 	TRY(array->size = expression(parser));
 	TRY(eat(parser, TK_COMMA));
 	TRY(array->initializer = expression(parser));
 	TRY(eat(parser, TK_RPAREN));
-	return ast;
+	return (Ast *) array;
 }
 
 static Ast *
 object(Parser *parser)
 {
-	Ast *ast = make_ast(AST_OBJECT);
-	AstObject *object = &ast->object;
+	AST_CREATE(AstObject, object, AST_OBJECT);
 	TRY(eat(parser, TK_OBJECT));
 	if (try_eat(parser, TK_EXTENDS)) {
 		TRY(object->extends = expression(parser));
@@ -627,14 +745,13 @@ object(Parser *parser)
 	}
 	TRY(eat(parser, TK_BEGIN));
 	TRY(expression_list(parser, &object->members, &object->member_cnt, TK_SEMICOLON, TK_END));
-	return ast;
+	return (Ast *) object;
 }
 
 static Ast *
 cond(Parser *parser)
 {
-	Ast *ast = make_ast(AST_IF);
-	AstConditional *conditional = &ast->conditional;
+	AST_CREATE(AstConditional, conditional, AST_IF);
 	TRY(eat(parser, TK_IF));
 	TRY(conditional->condition = expression(parser));
 	TRY(eat(parser, TK_THEN));
@@ -644,26 +761,24 @@ cond(Parser *parser)
 	} else {
 		conditional->alternative = create_null(parser);
 	}
-	return ast;
+	return (Ast *) conditional;
 }
 
 static Ast *
 loop(Parser *parser)
 {
-	Ast *ast = make_ast(AST_WHILE);
-	AstLoop *loop = &ast->loop;
+	AST_CREATE(AstLoop, loop, AST_WHILE);
 	TRY(eat(parser, TK_WHILE));
 	TRY(loop->condition = expression(parser));
 	TRY(eat(parser, TK_DO));
 	TRY(loop->body = expression(parser));
-	return ast;
+	return (Ast *) loop;
 }
 
 static Ast *
 print(Parser *parser)
 {
-	Ast *ast = make_ast(AST_PRINT);
-	AstPrint *print = &ast->print;
+	AST_CREATE(AstPrint, print, AST_PRINT);
 	TRY(eat(parser, TK_PRINT));
 	TRY(eat(parser, TK_LPAREN));
 	TRY(eat_string(parser, &print->format));
@@ -672,7 +787,7 @@ print(Parser *parser)
 	} else {
 		TRY(eat(parser, TK_RPAREN));
 	}
-	return ast;
+	return (Ast *) print;
 }
 
 static Ast *
@@ -689,22 +804,20 @@ paren(Parser *parser)
 static Ast *
 function(Parser *parser)
 {
-	Ast *ast = make_ast(AST_FUNCTION);
-	AstFunction *function = &ast->function;
+	AST_CREATE(AstFunction, function, AST_FUNCTION);
 	TRY(eat(parser, TK_FUNCTION));
 	TRY(eat_identifier(parser, &function->name));
 	TRY(eat(parser, TK_LPAREN));
 	TRY(identifier_list(parser, &function->parameters, &function->parameter_cnt, TK_COMMA, TK_RPAREN));
 	TRY(eat(parser, TK_RARROW));
 	TRY(function->body = expression(parser));
-	return ast;
+	return (Ast *) function;
 }
 
 static Ast *
 binop(Parser *parser, Ast *left, int rbp)
 {
-	Ast *ast = make_ast(AST_METHOD_CALL);
-	AstMethodCall *method_call = &ast->method_call;
+	AST_CREATE(AstMethodCall, method_call, AST_METHOD_CALL);
 	Token token = discard(parser);
 	method_call->object = left;
 	method_call->name.name = token.pos;
@@ -714,7 +827,7 @@ binop(Parser *parser, Ast *left, int rbp)
 	TRY(method_call->arguments[0] = expression_bp(parser, rbp));
 	//TRY(method_call->arguments = expression_bp(parser, rbp));
 	method_call->argument_cnt = 1;
-	return ast;
+	return (Ast *) method_call;
 }
 
 static Ast *
@@ -753,25 +866,23 @@ indexing(Parser *parser, Ast *left, int rbp)
 {
 	// rbp not used - delimited by TK_RBRACKET, not by precedence
 	(void) rbp;
-	Ast *ast = make_ast(AST_INDEX_ACCESS);
-	AstIndexAccess *index_access = &ast->index_access;
+	AST_CREATE(AstIndexAccess, index_access, AST_INDEX_ACCESS);
 	TRY(eat(parser, TK_LBRACKET));
 	index_access->object = left;
 	TRY(index_access->index = expression(parser));
 	TRY(eat(parser, TK_RBRACKET));
-	return ast;
+	return (Ast *) index_access;
 }
 
 static Ast *
 field(Parser *parser, Ast *left, int rbp)
 {
 	(void) rbp;
-	Ast *ast = make_ast(AST_FIELD_ACCESS);
-	AstFieldAccess *field_access = &ast->field_access;
+	AST_CREATE(AstFieldAccess, field_access, AST_FIELD_ACCESS);
 	TRY(eat(parser, TK_DOT));
 	field_access->object = left;
 	TRY(eat_identifier(parser, &field_access->field));
-	return ast;
+	return (Ast *) field_access;
 }
 
 static Ast *
@@ -865,11 +976,10 @@ parse(u8 *buf, size_t buf_len)
 {
 	Parser parser;
 	parser_init(&parser, buf, buf_len);
-	Ast *ast = make_ast(AST_BLOCK);
-	AstBlock *block = &ast->block;
+	AST_CREATE(AstBlock, block, AST_BLOCK);
 	// TODO: distinguish at the parser level an empty program (evaluates to null)
 	TRY(expression_list(&parser, &block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_EOF));
-	return ast;
+	return (Ast *) block;
 }
 
 typedef enum {
