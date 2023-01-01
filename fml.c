@@ -310,6 +310,9 @@ ident_eq(Identifier a, Identifier b)
 	return a.len == b.len && memcmp(a.name, b.name, a.len) == 0;
 }
 
+
+// FNV-1a hash
+// http://www.isthe.com/chongo/tech/comp/fnv/
 u64
 ident_hash(Identifier id)
 {
@@ -1586,6 +1589,9 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 	free(arguments);
 	return return_value;
 }
+
+// A simple hash table.
+// Inspired by: http://www.craftinginterpreters.com/hash-tables.html
 
 typedef struct {
 	Identifier key;
