@@ -1124,6 +1124,42 @@ value_print(Value value)
 	}
 }
 
+static void
+builtin_print(Identifier format, Value *arguments, size_t argument_cnt)
+{
+	bool in_escape = false;
+	size_t arg_index = 0;
+	for (size_t i = 0; i < format.len; i++) {
+		u8 c = format.name[i];
+		if (in_escape) {
+			in_escape = false;
+			switch (c) {
+			case  'n': c = '\n'; break;
+			case  't': c = '\t'; break;
+			case  'r': c = '\r'; break;
+			case  '~': c =  '~'; break;
+			case  '"': c =  '"'; break;
+			case '\\': c = '\\'; break;
+			default:
+				fprintf(stderr, "invalid string escape sequence: %c", c);
+				assert(false);
+			}
+			putchar(c);
+		} else {
+			switch (c) {
+			case '\\': in_escape = true; break;
+			case '~':
+				assert(arg_index < argument_cnt);
+				value_print(arguments[arg_index]);
+				arg_index += 1;
+				break;
+			default:
+				putchar(c);
+			}
+		}
+	}
+}
+
 bool
 value_to_bool(Value value)
 {
@@ -1454,43 +1490,11 @@ interpret(InterpreterState *is, Ast *ast)
 		return value;
 	}
 	case AST_PRINT: {
-		const u8 *format = ast->print.format.name;
-		size_t length = ast->print.format.len;
-		bool in_escape = false;
-		size_t arg_index = 0;
 		Value *arguments = calloc(ast->print.argument_cnt, sizeof(*arguments));
 		for (size_t i = 0; i < ast->print.argument_cnt; i++) {
 			arguments[i] = interpret(is, ast->print.arguments[i]);
 		}
-		for (size_t i = 0; i < length; i++) {
-			u8 c = format[i];
-			if (in_escape) {
-				in_escape = false;
-				switch (c) {
-				case  'n': c = '\n'; break;
-				case  't': c = '\t'; break;
-				case  'r': c = '\r'; break;
-				case  '~': c =  '~'; break;
-				case  '"': c =  '"'; break;
-				case '\\': c = '\\'; break;
-				default:
-					fprintf(stderr, "invalid string escape sequence: %c", c);
-					assert(false);
-				}
-				putchar(c);
-			} else {
-				switch (c) {
-				case '\\': in_escape = true; break;
-				case '~':
-					assert(arg_index < ast->print.argument_cnt);
-					value_print(arguments[arg_index]);
-					arg_index += 1;
-					break;
-				default:
-					putchar(c);
-				}
-			}
-		}
+		builtin_print(ast->print.format, arguments, ast->print.argument_cnt);
 		free(arguments);
 		fflush(stdout);
 		return make_null();
@@ -2071,43 +2075,10 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		}
 		case OP_PRINT: {
 			u16 constant_index = read_u16(&ip);
+			u8 argument_cnt = read_u8(&ip);
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_STRING);
-			const u8 *format = constant->string.name;
-			size_t length = constant->string.len;
-			bool in_escape = false;
-
-			u8 argument_cnt = read_u8(&ip);
-			u8 arg_index = 0;
-			for (size_t i = 0; i < length; i++) {
-				u8 c = format[i];
-				if (in_escape) {
-					in_escape = false;
-					switch (c) {
-					case  'n': c = '\n'; break;
-					case  't': c = '\t'; break;
-					case  'r': c = '\r'; break;
-					case  '~': c =  '~'; break;
-					case  '"': c =  '"'; break;
-					case '\\': c = '\\'; break;
-					default:
-						fprintf(stderr, "invalid string escape sequence: %c", c);
-						assert(false);
-					}
-					putchar(c);
-				} else {
-					switch (c) {
-					case '\\': in_escape = true; break;
-					case '~':
-						assert(arg_index < argument_cnt);
-						value_print(vm->stack[vm->stack_pos - (argument_cnt - 1) + arg_index]);
-						arg_index += 1;
-						break;
-					default:
-						putchar(c);
-					}
-				}
-			}
+			builtin_print(constant->string, &vm->stack[vm->stack_pos - (argument_cnt - 1)], argument_cnt);
 			vm->stack_pos -= argument_cnt;
 			vm->stack[++vm->stack_pos] = make_null();
 			break;
