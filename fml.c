@@ -1739,8 +1739,7 @@ typedef struct {
 } CMethod;
 
 typedef struct {
-	u16 *members;
-	size_t member_cnt;
+	u8 *start;
 } Class;
 
 typedef struct {
@@ -1758,6 +1757,7 @@ typedef struct {
 typedef struct {
 	Constant *constants;
 	size_t constant_cnt;
+	u8 *global_class;
 	u16 *globals;
 	size_t global_cnt;
 	u16 entry_point;
@@ -1819,11 +1819,9 @@ read_constant(u8 **input, Constant *constant)
 		break;
 	case CK_CLASS: {
 		Class *class = &constant->class;
-		class->member_cnt = read_u16(input);
-		class->members = calloc(class->member_cnt, sizeof(*class->members));
-		for (size_t i = 0; i < class->member_cnt; i++) {
-			class->members[i] = read_u16(input);
-		}
+		class->start = *input;
+		size_t member_cnt = read_u16(input);
+		*input += 2 * member_cnt;
 		break;
 	}
 	default:
@@ -1840,11 +1838,9 @@ read_program(Program *program, u8 *input, size_t input_len)
 	for (size_t i = 0; i < program->constant_cnt; i++) {
 		read_constant(&input, &program->constants[i]);
 	}
-	program->global_cnt = read_u16(&input);
-	program->globals = calloc(program->global_cnt, sizeof(*program->globals));
-	for (size_t i = 0; i < program->global_cnt; i++) {
-		program->globals[i] = read_u16(&input);
-	}
+	program->global_class = input;
+	size_t global_cnt = read_u16(&input);
+	input += 2 * global_cnt;
 	program->entry_point = read_u16(&input);
 	return true;
 }
@@ -1877,13 +1873,19 @@ vm_pop_value(VM *vm)
 }
 
 static Value
-vm_collect_members(VM *vm, u16 *members, size_t member_cnt, Value (*make_value)(VM *vm))
+vm_instantiate_class(VM *vm, u8 *class, Value (*make_value)(VM *vm))
 {
+	size_t member_cnt = read_u16(&class);
+	u16 *members = (void*) class;
+
 	Value object_value = make_object(member_cnt);
 	Object *object = value_as_object(object_value);
 	Constant *constants = vm->program->constants;
+
 	for (size_t i = member_cnt; i--;) {
-		Constant *constant = &constants[members[i]];
+		u8 *constant_index_pos = (void *) &members[i];
+		u16 constant_index = read_u16(&constant_index_pos);
+		Constant *constant = &constants[constant_index];
 		switch (constant->kind) {
 		case CK_SLOT: {
 			Constant *name = &constants[constant->slot];
@@ -1969,7 +1971,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_CLASS);
 			Class *class = &constant->class;
-			Value object = vm_collect_members(vm, class->members, class->member_cnt, vm_pop_value);
+			Value object = vm_instantiate_class(vm, class->start, vm_pop_value);
 			vm->stack[++vm->stack_pos] = object;
 			break;
 		}
@@ -2194,7 +2196,7 @@ main(int argc, char **argv) {
 			.frame_stack_len = 1024,
 			.bp = 0,
 		};
-		vm.global = vm_collect_members(&vm, program.globals, program.global_cnt, make_null_vm);
+		vm.global = vm_instantiate_class(&vm, program.global_class, make_null_vm);
 		vm_call_method(&vm, program.entry_point, 0);
 	}
 
