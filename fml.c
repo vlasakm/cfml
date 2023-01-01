@@ -18,6 +18,14 @@ typedef int16_t i16;
 typedef int32_t i32;
 typedef int64_t i64;
 
+#define UNREACHABLE() unreachable(__FILE__, __LINE__)
+_Noreturn void
+unreachable(char *file, size_t line)
+{
+	fprintf(stderr, "ERROR: unreachable code reached at %s:%zu\n", file, line);
+	exit(1);
+}
+
 typedef struct {
 	const u8 *pos;
 	const u8 *end;
@@ -548,7 +556,7 @@ primary(Parser *parser)
 		ast->boolean.value = false;
 		break;
 	default:
-		__builtin_unreachable();
+		UNREACHABLE();
 	}
 	return ast;
 }
@@ -1521,7 +1529,7 @@ interpret(InterpreterState *is, Ast *ast)
 		return value;
 	}
 	}
-	__builtin_unreachable();
+	UNREACHABLE();
 }
 
 static Value
