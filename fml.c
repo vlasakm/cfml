@@ -1920,8 +1920,9 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		vm->frame_stack[vm->bp + (argument_cnt - 1 - i)] = make_null();
 	}
 
+	u8 *ip = method->instruction_start;
 	u8 *end = method->instruction_start + method->instruction_len;
-	for (u8 *ip = method->instruction_start; ip != end;) {
+	while (ip != end) {
 		switch (read_u8(&ip)) {
 		case OP_LITERAL: {
 			u16 constant_index = read_u16(&ip);
@@ -1995,8 +1996,8 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_GET_FIELD: {
-			Value object = vm->stack[vm->stack_pos--];
 			u16 constant_index = read_u16(&ip);
+			Value object = vm->stack[vm->stack_pos--];
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_STRING);
 			Value *lvalue = value_field(object, constant->string);
@@ -2005,9 +2006,9 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_SET_FIELD: {
+			u16 constant_index = read_u16(&ip);
 			Value value = vm->stack[vm->stack_pos--];
 			Value object = vm->stack[vm->stack_pos--];
-			u16 constant_index = read_u16(&ip);
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_STRING);
 			Value *lvalue = value_field(object, constant->string);
@@ -2045,13 +2046,13 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		}
 		case OP_CALL_FUNCTION: {
 			u16 constant_index = read_u16(&ip);
+			u8 argument_cnt = read_u8(&ip);
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_STRING);
 			Value object = vm->global;
 			Value *method_value = value_method(object, &object, constant->string);
 			assert(method_value);
 			u16 method_index = value_as_function_bc(*method_value);
-			u8 argument_cnt = read_u8(&ip);
 			vm_call_method(vm, method_index, argument_cnt);
 			break;
 		}
@@ -2078,7 +2079,8 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			u8 argument_cnt = read_u8(&ip);
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_STRING);
-			builtin_print(constant->string, &vm->stack[vm->stack_pos - (argument_cnt - 1)], argument_cnt);
+			Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
+			builtin_print(constant->string, arguments, argument_cnt);
 			vm->stack_pos -= argument_cnt;
 			vm->stack[++vm->stack_pos] = make_null();
 			break;
