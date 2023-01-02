@@ -1016,6 +1016,9 @@ typedef struct {
 		Ast *function;
 		// For BC interpreter.
 		u16 function_index;
+
+		// For BC compiler.
+		u16 local_index;
 	};
 } Value;
 
@@ -1620,7 +1623,7 @@ env_lookup_func(Environment *env, Identifier name)
 
 static Value interpreter_call_method(InterpreterState *is, Value object, bool function_call, Identifier method, Ast **ast_arguments, size_t argument_cnt);
 
-Value
+static Value
 interpret(InterpreterState *is, Ast *ast)
 {
 	switch (ast->kind) {
@@ -1815,6 +1818,17 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 	}
 	free(arguments);
 	return return_value;
+}
+
+void
+interpret_ast(Ast *ast)
+{
+	Environment *env = env_create(NULL);
+	InterpreterState is = {
+		.env = env,
+		.global_env = env,
+	};
+	interpret(&is, ast);
 }
 
 // Parse little endian numbers from byte array.Beware of implicit promotion from uint8_t to signed int.
@@ -2251,6 +2265,475 @@ end:
 	vm->bp = saved_bp;
 }
 
+static void
+vm_run(Program *program)
+{
+	Table label_offsets;
+	table_init(&label_offsets, 0);
+	for (size_t i = 0; i < program->constant_cnt; i++) {
+		if (program->constants[i].kind == CK_METHOD) {
+			CMethod *method = &program->constants[i].method;
+			u8 *start = method->instruction_start;
+			u8 *end = start + method->instruction_len;
+			u8 *ip = start;
+			while (ip != end) {
+				switch (*ip++) {
+				case OP_LITERAL: ip += 2; break;
+				case OP_ARRAY: break;
+				case OP_OBJECT: ip += 2; break;
+				case OP_GET_LOCAL: ip += 2; break;
+				case OP_SET_LOCAL: ip += 2; break;
+				case OP_GET_GLOBAL: ip += 2; break;
+				case OP_SET_GLOBAL: ip += 2; break;
+				case OP_GET_FIELD: ip += 2; break;
+				case OP_SET_FIELD: ip += 2; break;
+				case OP_LABEL: {
+					size_t offset = ip - 1 - start;
+					u16 label_index = read_u16(&ip);
+					Constant *label_const = &program->constants[label_index];
+					assert(label_const->kind == CK_STRING);
+					Identifier label = label_const->string;
+					assert(table_insert(&label_offsets, label, make_integer(offset)));
+					break;
+				}
+				case OP_JUMP: ip += 2; break;
+				case OP_BRANCH: ip += 2; break;
+				case OP_CALL_FUNCTION: ip += 3; break;
+				case OP_CALL_METHOD: ip += 3; break;
+				case OP_PRINT: ip += 3; break;
+				case OP_DROP:  break;
+				case OP_RETURN: break;
+				}
+			}
+
+		}
+	}
+	VM vm = {
+		.program = program,
+		.label_offsets = label_offsets,
+		.global = make_null(),
+		.stack = calloc(1024, sizeof(Value)),
+		.stack_pos = -1,
+		.stack_len = 1024,
+		.frame_stack = calloc(1024, sizeof(Value)),
+		.frame_stack_pos = 0,
+		.frame_stack_len = 1024,
+		.bp = 0,
+	};
+	vm.global = vm_instantiate_class(&vm, program->global_class, make_null_vm);
+	vm_call_method(&vm, program->entry_point, 0);
+	// Check that the program left exactly one value on the stack
+	assert(vm.stack_pos == 0);
+}
+
+typedef struct {
+	Constant *constants;
+	size_t constant_cnt;
+	size_t constant_capacity;
+	u8 *instructions;
+	size_t instruction_cnt;
+	size_t instruction_capacity;
+	u16 *members;
+	size_t member_cnt;
+	size_t member_capacity;
+	bool in_object;
+	bool in_block;
+	Environment *env;
+	u16 local_cnt;
+} CompilerState;
+
+void
+grow(void **array, size_t *cnt, size_t *capacity, size_t new_elems, size_t elem_size)
+{
+	if (*cnt + new_elems > *capacity) {
+		size_t new_capacity = *capacity ? *capacity * 2 : 16;
+		*capacity = new_capacity;
+		*array = realloc(*array, new_capacity * elem_size);
+	}
+}
+
+void
+inst_write_u8(CompilerState *cs, u8 b)
+{
+	grow(&cs->instructions, &cs->instruction_cnt, &cs->instruction_capacity, 1, sizeof(*cs->instructions));
+	cs->instructions[cs->instruction_cnt++] = b;
+}
+
+void
+inst_write_u16(CompilerState *cs, u16 b)
+{
+	grow(&cs->instructions, &cs->instruction_cnt, &cs->instruction_capacity, 2, sizeof(*cs->instructions));
+	cs->instructions[cs->instruction_cnt + 0] = b >> 0;
+	cs->instructions[cs->instruction_cnt + 1] = b >> 8;
+	cs->instruction_cnt += 2;
+}
+
+u16
+add_constant(CompilerState *cs, Constant constant)
+{
+	grow(&cs->constants, &cs->constant_cnt, &cs->constant_capacity, 1, sizeof(*cs->constants));
+	size_t index = cs->constant_cnt++;
+	assert(index <= 0xFFFF);
+	cs->constants[index] = constant;
+	return index & 0xFFFF;
+}
+
+u16
+add_string(CompilerState *cs, Identifier name)
+{
+	return add_constant(cs, (Constant) {
+	       .kind = CK_STRING,
+	       .string = name,
+	});
+}
+
+void
+inst_constant(CompilerState *cs, Constant constant)
+{
+	inst_write_u16(cs, add_constant(cs, constant));
+}
+
+void
+inst_string(CompilerState *cs, Identifier name)
+{
+	inst_write_u16(cs, add_string(cs, name));
+}
+
+void
+add_call_method(CompilerState *cs, Identifier name, u8 argument_cnt)
+{
+	inst_write_u8(cs, OP_CALL_METHOD);
+	add_string(cs, name);
+	inst_write_u8(cs, argument_cnt);
+}
+
+static void
+compile(CompilerState *cs, Ast *ast)
+{
+	switch (ast->kind) {
+	case AST_NULL: {
+		inst_write_u8(cs, OP_LITERAL);
+		inst_constant(cs, (Constant) { .kind = CK_NULL });
+		return;
+	}
+	case AST_BOOLEAN: {
+		inst_write_u8(cs, OP_LITERAL);
+		inst_constant(cs, (Constant) {
+		       .kind = CK_BOOLEAN,
+		       .boolean = ast->boolean.value,
+		});
+		return;
+	}
+	case AST_INTEGER: {
+		inst_write_u8(cs, OP_LITERAL);
+		inst_constant(cs, (Constant) {
+		       .kind = CK_INTEGER,
+		       .integer = ast->integer.value,
+		});
+		return;
+	}
+	case AST_ARRAY: {
+		AstArray *array = &ast->array;
+		compile(cs, array->size);
+		compile(cs, array->initializer);
+		inst_write_u8(cs, OP_ARRAY);
+		return;
+	}
+	case AST_OBJECT: {
+		AstObject *object = &ast->object;
+		compile(cs, object->extends);
+		bool saved_in_object = cs->in_object;
+		u16 *saved_members = cs->members;
+		size_t saved_members_cnt = cs->member_cnt;
+		size_t saved_members_capacity = cs->member_capacity;
+		cs->members = NULL;
+		cs->member_cnt = 0;
+		cs->member_capacity = 0;
+		grow(&cs->members, &cs->member_cnt, &cs->member_capacity, 1, sizeof(*cs->members));
+		cs->member_cnt++;
+
+		for (size_t i = 0; i < object->member_cnt; i++) {
+			Ast *ast_member = object->members[i];
+			switch (ast_member->kind) {
+			case AST_VARIABLE:
+			case AST_FUNCTION:
+				compile(cs, ast_member);
+			break;
+			default:
+				assert(false);
+			}
+		}
+		cs->members[0] = cs->member_cnt - 1;
+		inst_write_u8(cs, OP_OBJECT);
+		inst_constant(cs, (Constant) {
+		       .kind = CK_CLASS,
+		       .class = (Class) { .start = (u8*) cs->members, },
+		});
+		cs->in_object = saved_in_object;
+		cs->members = saved_members;
+		cs->member_cnt = saved_members_cnt;
+		cs->member_capacity = saved_members_capacity;
+		break;
+	}
+	case AST_FUNCTION: {
+		AstFunction *function = &ast->function;
+		Environment *saved_environment = cs->env;
+		u16 saved_local_cnt = cs->local_cnt;
+		u8 *saved_instructions = cs->instructions;
+		size_t saved_instruction_cnt = cs->instruction_cnt;
+		size_t saved_instruction_capacity = cs->instruction_capacity;
+		bool saved_in_block = cs->in_block;
+
+		cs->env = env_create(cs->env);
+		cs->instructions = NULL;
+		cs->instruction_cnt = 0;
+		cs->instruction_capacity = 0;
+		cs->local_cnt = 0;
+		cs->in_block = false;
+		if (cs->in_object) {
+			env_define(cs->env, THIS, make_integer(cs->local_cnt));
+			cs->local_cnt += 1;
+		}
+		for (size_t i = 0; i < function->parameter_cnt; i++) {
+			env_define(cs->env, function->parameters[i], make_integer(cs->local_cnt));
+			cs->local_cnt += 1;
+		}
+		compile(cs, function->body);
+		inst_write_u8(cs, OP_RETURN);
+		env_free(cs->env);
+
+		u16 name_constant = add_string(cs, function->name);
+		u16 method = add_constant(cs, (Constant) {
+		       .kind = CK_METHOD,
+		       .method = (CMethod) {
+				.name = name_constant,
+				.local_cnt = cs->local_cnt,
+				.parameter_cnt = function->parameter_cnt,
+				.instruction_start = cs->instructions,
+				.instruction_len = cs->instruction_cnt,
+			},
+		});
+		grow(&cs->members, &cs->member_cnt, &cs->member_capacity, 1, sizeof(*cs->members));
+		cs->members[cs->member_cnt++] = method;
+		cs->env = saved_environment;
+		cs->instructions = saved_instructions;
+		cs->instruction_cnt = saved_instruction_cnt;
+		cs->instruction_capacity = saved_instruction_capacity;
+		cs->local_cnt = saved_local_cnt;
+		cs->in_block = saved_in_block;
+		if (!cs->in_object) {
+			inst_write_u8(cs, OP_LITERAL);
+			inst_constant(cs, (Constant) { .kind = CK_NULL });
+		}
+		return;
+	}
+
+	case AST_VARIABLE: {
+		AstVariable *variable = &ast->variable;
+		compile(cs, variable->value);
+		if (cs->in_object || !cs->in_block) {
+			u16 name = add_string(cs, variable->name);
+			u16 slot = add_constant(cs, (Constant) {
+			       .kind = CK_SLOT,
+			       .slot = name,
+			});
+			grow(&cs->members, &cs->member_cnt, &cs->member_capacity, 1, sizeof(*cs->members));
+			cs->members[cs->member_cnt++] = slot;
+			if (!cs->in_object) {
+				inst_write_u8(cs, OP_SET_GLOBAL);
+				inst_string(cs, variable->name);
+			}
+		} else {
+			env_define(cs->env, variable->name, make_integer(cs->local_cnt));
+			inst_write_u8(cs, OP_SET_LOCAL);
+			inst_write_u16(cs, cs->local_cnt);
+			cs->local_cnt += 1;
+		}
+		return;
+	}
+
+	case AST_VARIABLE_ACCESS: {
+		AstVariableAccess *variable_access = &ast->variable_access;
+		Value *local_index = env_lookup_raw(cs->env, variable_access->name);
+		if (local_index) {
+			inst_write_u8(cs, OP_GET_LOCAL);
+			inst_write_u16(cs, value_as_integer(*local_index));
+		} else {
+			inst_write_u8(cs, OP_GET_GLOBAL);
+			inst_string(cs, variable_access->name);
+		}
+		return;
+	}
+	case AST_VARIABLE_ASSIGNMENT: {
+		AstVariableAssignment *variable_assignment = &ast->variable_assignment;
+		compile(cs, variable_assignment->value);
+		Value *local_index = env_lookup_raw(cs->env, variable_assignment->name);
+		if (local_index) {
+			inst_write_u8(cs, OP_SET_LOCAL);
+			inst_write_u16(cs, value_as_integer(*local_index));
+		} else {
+			inst_write_u8(cs, OP_SET_GLOBAL);
+			inst_string(cs, variable_assignment->name);
+		}
+		return;
+	}
+
+	case AST_INDEX_ACCESS: {
+		AstIndexAccess *index_access = &ast->index_access;
+		compile(cs, index_access->object);
+		compile(cs, index_access->index);
+		add_call_method(cs, GET, 2);
+		return;
+	}
+	case AST_INDEX_ASSIGNMENT: {
+		AstIndexAssignment *index_assignment = &ast->index_assignment;
+		compile(cs, index_assignment->object);
+		compile(cs, index_assignment->index);
+		compile(cs, index_assignment->value);
+		add_call_method(cs, SET, 3);
+		return;
+	}
+
+	case AST_FIELD_ACCESS: {
+		AstFieldAccess *field_access = &ast->field_access;
+		compile(cs, field_access->object);
+		inst_write_u8(cs, OP_GET_FIELD);
+		inst_string(cs, field_access->field);
+		return;
+	}
+	case AST_FIELD_ASSIGNMENT: {
+		AstFieldAssignment *field_assignment = &ast->field_assignment;
+		compile(cs, field_assignment->object);
+		compile(cs, field_assignment->value);
+		inst_write_u8(cs, OP_SET_FIELD);
+		inst_string(cs, field_assignment->field);
+		return;
+	}
+
+	case AST_FUNCTION_CALL: {
+		AstFunctionCall *function_call = &ast->function_call;
+		for (size_t i = 0; i < function_call->argument_cnt; i++) {
+			compile(cs, function_call->arguments[i]);
+		}
+		inst_write_u8(cs, OP_CALL_FUNCTION);
+		inst_string(cs, function_call->name);
+		inst_write_u8(cs, function_call->argument_cnt);
+		return;
+	}
+	case AST_METHOD_CALL: {
+		AstMethodCall *method_call = &ast->method_call;
+		compile(cs, method_call->object);
+		for (size_t i = 0; i < method_call->argument_cnt; i++) {
+			compile(cs, method_call->arguments[i]);
+		}
+		add_call_method(cs, method_call->name, method_call->argument_cnt + 1);
+		return;
+	}
+
+	case AST_IF: {
+		// TODO
+		return;
+	}
+	case AST_WHILE: {
+		// TODO
+		return;
+	}
+	case AST_PRINT: {
+		AstPrint *print = &ast->print;
+		for (size_t i = 0; i < print->argument_cnt; i++) {
+			compile(cs, print->arguments[i]);
+		}
+		inst_write_u8(cs, OP_PRINT);
+		inst_string(cs, print->format);
+		inst_write_u8(cs, print->argument_cnt);
+		return;
+	}
+	case AST_BLOCK: {
+		Environment *saved_environment = cs->env;
+		bool saved_in_block = cs->in_block;
+		cs->in_block = true;
+		cs->env = env_create(cs->env);
+		AstBlock *block = &ast->block;
+		if (block->expression_cnt == 0) {
+			inst_write_u8(cs, OP_LITERAL);
+			inst_constant(cs, (Constant) { .kind = CK_NULL });
+			return;
+		}
+		compile(cs, block->expressions[0]);
+		for (size_t i = 1; i < block->expression_cnt; i++) {
+			inst_write_u8(cs, OP_DROP);
+			compile(cs, block->expressions[i]);
+		}
+		env_free(cs->env);
+		cs->env = saved_environment;
+		cs->in_block = saved_in_block;
+		return;
+	}
+	case AST_TOP: {
+		AstTop *top = &ast->top;
+		if (top->expression_cnt == 0) {
+			inst_write_u8(cs, OP_LITERAL);
+			inst_constant(cs, (Constant) { .kind = CK_NULL });
+			return;
+		}
+		compile(cs, top->expressions[0]);
+		for (size_t i = 1; i < top->expression_cnt; i++) {
+			inst_write_u8(cs, OP_DROP);
+			compile(cs, top->expressions[i]);
+		}
+		return;
+	}
+	}
+	//UNREACHABLE();
+}
+
+void
+compile_ast(Program *program, Ast *ast)
+{
+	CompilerState cs = {
+		.constants = NULL,
+		.constant_cnt = 0,
+		.constant_capacity = 0,
+		.instructions = NULL,
+		.instruction_cnt = 0,
+		.instruction_capacity = 0,
+		.members = NULL,
+		.member_cnt = 0,
+		.member_capacity = 0,
+		.in_object = false,
+		.in_block = false,
+		.env = NULL,
+		.local_cnt = 0,
+	};
+
+	grow(&cs.members, &cs.member_cnt, &cs.member_capacity, 1, sizeof(*cs.members));
+	cs.member_cnt++;
+
+	compile(&cs, ast);
+
+	Identifier program_name = {
+		.name = (void*) "program",
+		.len = 7,
+	};
+	u16 name_constant = add_string(&cs, program_name);
+	u16 entry_point = add_constant(&cs, (Constant) {
+	       .kind = CK_METHOD,
+	       .method = (CMethod) {
+			.name = name_constant,
+			.local_cnt = cs.local_cnt,
+			.parameter_cnt = 0,
+			.instruction_start = cs.instructions,
+			.instruction_len = cs.instruction_cnt,
+		},
+	});
+	cs.members[0] = cs.member_cnt - 1;
+
+	program->constants = cs.constants;
+	program->constant_cnt = cs.constant_cnt;
+	program->global_class = (u8 *) cs.members;
+	program->entry_point = entry_point;
+}
+
 int
 main(int argc, char **argv) {
 	if(argc != 3) {
@@ -2275,70 +2758,17 @@ main(int argc, char **argv) {
 	if (strcmp(argv[1], "run") == 0) {
 		Ast *ast = parse(buf, fsize);
 		assert(ast);
-
-		Environment *env = env_create(NULL);
-		InterpreterState is = {
-			.env = env,
-			.global_env = env,
-		};
-		interpret(&is, ast);
+		interpret_ast(ast);
 	} else if (strcmp(argv[1], "execute") == 0) {
 		Program program;
 		read_program(&program, buf, fsize);
-		Table label_offsets;
-		table_init(&label_offsets, 0);
-		for (size_t i = 0; i < program.constant_cnt; i++) {
-			if (program.constants[i].kind == CK_METHOD) {
-				CMethod *method = &program.constants[i].method;
-				u8 *start = method->instruction_start;
-				u8 *end = start + method->instruction_len;
-				u8 *ip = start;
-				while (ip != end) {
-					switch (*ip++) {
-					case OP_LITERAL: ip += 2; break;
-					case OP_ARRAY: break;
-					case OP_OBJECT: ip += 2; break;
-					case OP_GET_LOCAL: ip += 2; break;
-					case OP_SET_LOCAL: ip += 2; break;
-					case OP_GET_GLOBAL: ip += 2; break;
-					case OP_SET_GLOBAL: ip += 2; break;
-					case OP_GET_FIELD: ip += 2; break;
-					case OP_SET_FIELD: ip += 2; break;
-					case OP_LABEL: {
-						size_t offset = ip - 1 - start;
-						u16 label_index = read_u16(&ip);
-						Constant *label_const = &program.constants[label_index];
-						assert(label_const->kind == CK_STRING);
-						Identifier label = label_const->string;
-						assert(table_insert(&label_offsets, label, make_integer(offset)));
-						break;
-					}
-					case OP_JUMP: ip += 2; break;
-					case OP_BRANCH: ip += 2; break;
-					case OP_CALL_FUNCTION: ip += 3; break;
-					case OP_CALL_METHOD: ip += 3; break;
-					case OP_PRINT: ip += 3; break;
-					case OP_DROP:  break;
-					case OP_RETURN: break;
-					}
-				}
-
-			}
-		}
-		VM vm = {
-			.program = &program,
-			.label_offsets = label_offsets,
-			.global = make_null(),
-			.stack = calloc(1024, sizeof(Value)),
-			.stack_pos = -1,
-			.stack_len = 1024,
-			.frame_stack = calloc(1024, sizeof(Value)),
-			.frame_stack_pos = 0,
-			.frame_stack_len = 1024,
-			.bp = 0,
-		};
-		vm.global = vm_instantiate_class(&vm, program.global_class, make_null_vm);
-		vm_call_method(&vm, program.entry_point, 0);
+		vm_run(&program);
+	} else if (strcmp(argv[1], "compile") == 0) {
+		Ast *ast = parse(buf, fsize);
+		assert(ast);
+		Program program;
+		compile_ast(&program, ast);
+		vm_run(&program);
 	}
 
 
