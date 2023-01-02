@@ -673,9 +673,9 @@ primary(Parser *parser)
 			negative = !negative;
 			pos += 1;
 		}
-		i32 value = 0;
+		i64 value = 0;
 		for (; pos < token.end; pos++) {
-			value = value * 10 + *pos - '0';
+			value = value * 10 + (*pos - '0');
 		}
 		ast->integer.value = negative ? -value : value;
 		break;
