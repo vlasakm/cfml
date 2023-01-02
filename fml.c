@@ -1011,8 +1011,11 @@ typedef struct {
 		bool boolean;
 		i32 integer;
 		GcValue *gcvalue;
+
+		// For AST interpreter.
 		Ast *function;
-		uintptr_t function_index;
+		// For BC interpreter.
+		u16 function_index;
 	};
 } Value;
 
@@ -1291,6 +1294,7 @@ builtin_print(Identifier format, Value *arguments, size_t argument_cnt)
 			}
 		}
 	}
+	fflush(stdout);
 }
 
 bool
@@ -1900,8 +1904,6 @@ typedef struct {
 	Constant *constants;
 	size_t constant_cnt;
 	u8 *global_class;
-	u16 *globals;
-	size_t global_cnt;
 	u16 entry_point;
 } Program;
 
