@@ -328,7 +328,6 @@ ident_hash(Identifier id)
 static Identifier THIS  = { .name = (const u8*) "this", .len = 4 };
 static Identifier SET   = { .name = (const u8*)  "set", .len = 3 };
 static Identifier GET   = { .name = (const u8*)  "get", .len = 3 };
-static Identifier EMPTY = { .name = (const u8*)     "", .len = 0 };
 
 typedef enum {
 	AST_NULL,
@@ -350,6 +349,7 @@ typedef enum {
 	AST_WHILE,
 	AST_PRINT,
 	AST_BLOCK,
+	AST_TOP,
 } AstKind;
 
 #define AST_COMMON_FIELDS \
@@ -473,6 +473,12 @@ typedef struct {
 	size_t expression_cnt;
 } AstBlock;
 
+typedef struct {
+	AST_COMMON_FIELDS
+	Ast **expressions;
+	size_t expression_cnt;
+} AstTop;
+
 union Ast {
 	struct {
 		AST_COMMON_FIELDS
@@ -495,6 +501,7 @@ union Ast {
 	AstLoop loop;
 	AstPrint print;
 	AstBlock block;
+	AstTop top;
 };
 
 typedef struct {
@@ -976,10 +983,10 @@ parse(u8 *buf, size_t buf_len)
 {
 	Parser parser;
 	parser_init(&parser, buf, buf_len);
-	AST_CREATE(AstBlock, block, AST_BLOCK);
+	AST_CREATE(AstTop, top, AST_TOP);
 	// TODO: distinguish at the parser level an empty program (evaluates to null)
-	TRY(expression_list(&parser, &block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_EOF));
-	return (Ast *) block;
+	TRY(expression_list(&parser, &top->expressions, &top->expression_cnt, TK_SEMICOLON, TK_EOF));
+	return (Ast *) top;
 }
 
 typedef enum {
@@ -1174,7 +1181,6 @@ ident_cmp(Identifier a, Identifier b)
 	return cmp == 0 ? (a.len > b.len) - (b.len > a.len) : cmp;
 }
 
-
 void
 value_print(Value value)
 {
@@ -1295,14 +1301,6 @@ value_to_bool(Value value)
 	}
 	return true;
 }
-
-typedef struct Environment Environment;
-
-struct Environment {
-	Environment *prev;
-	Identifier name;
-	Value value;
-};
 
 size_t
 value_as_index(Value value)
@@ -1443,21 +1441,136 @@ err:
 	assert(false);
 }
 
+// A simple hash table.
+// Inspired by: http://www.craftinginterpreters.com/hash-tables.html
+
+typedef struct {
+	Identifier key;
+	Value value;
+} Entry;
+
+typedef struct {
+	Entry *entries;
+	size_t entry_cnt;
+	size_t capacity;
+} Table;
+
+void
+table_init(Table *table, size_t capacity)
+{
+	table->entry_cnt = 0;
+	if (capacity == 0) {
+		table->capacity = 0;
+		table->entries = NULL;
+	} else {
+		table->capacity = 1;
+		while (table->capacity < capacity) {
+			table->capacity *= 2;
+		}
+		table->entries = calloc(table->capacity, sizeof(*table->entries));
+	}
+}
+
+void
+table_free(Table *table)
+{
+	free(table->entries);
+}
+
+Entry *
+table_find_entry(Entry *entries, size_t capacity, Identifier key)
+{
+	u64 hash = ident_hash(key);
+	// NOTE: We guarantee that the capacity is a power of two. The modulo
+	// operation thus simplifies to simple binary AND.
+	size_t mask = capacity - 1;
+	for (size_t index = hash & mask;; index = (index + 1) & mask) {
+		Entry *entry = &entries[index];
+		if (entry->key.name == NULL || ident_eq(entry->key, key)) {
+			return entry;
+		}
+	}
+}
+
+void
+table_grow(Table *table)
+{
+	size_t capacity = table->capacity ? table->capacity * 2 : 8;
+	// TODO: intialize memory if not zero allocated
+	Entry *entries = calloc(capacity, sizeof(*entries));
+	for (size_t i = 0; i < table->capacity; i++) {
+		Entry *old = &table->entries[i];
+		if (old->key.name == NULL) {
+			continue;
+		}
+		Entry *new = table_find_entry(entries, capacity, old->key);
+		*new = *old;
+	}
+	free(table->entries);
+	table->entries = entries;
+	table->capacity = capacity;
+}
+
+Value *
+table_get(Table *table, Identifier key)
+{
+	if (table->entry_cnt == 0) {
+		return NULL;
+	}
+	Entry *entry = table_find_entry(table->entries, table->capacity, key);
+	if (entry->key.name == NULL) {
+		return NULL;
+	}
+	return &entry->value;
+}
+
+bool
+table_insert(Table *table, Identifier key, Value value)
+{
+	if (table->entry_cnt + 1 >= table->capacity / 2) {
+		table_grow(table);
+	}
+	Entry *entry = table_find_entry(table->entries, table->capacity, key);
+	bool new = entry->key.name == NULL;
+	if (new) {
+		table->entry_cnt += 1;
+		entry->key = key;
+	}
+	entry->value = value;
+	return new;
+}
+
+typedef struct Environment Environment;
+struct Environment {
+	Environment *prev;
+	Table env;
+};
+
 typedef struct {
 	Environment *env;
-	Environment **global_env;
-	bool in_global;
+	Environment *global_env;
 } InterpreterState;
 
-
 Environment *
-make_env(Environment *prev, Identifier name, Value value)
+env_create(Environment *prev)
 {
-	Environment *env = malloc(sizeof(*env));
+	Environment *env = calloc(sizeof(*env), 1);
 	env->prev = prev;
-	env->name = name;
-	env->value = value;
+	table_init(&env->env, 0);
 	return env;
+}
+
+void
+env_free(Environment *env)
+{
+	table_free(&env->env);
+	free(env);
+}
+
+void
+env_define(Environment *env, Identifier name, Value value)
+{
+	table_insert(&env->env, name, value);
 }
 
 Value *
@@ -1466,8 +1579,9 @@ env_lookup_raw(Environment *env, Identifier name)
 	if (!env) {
 		return NULL;
 	}
-	if (ident_eq(env->name, name)) {
-		return &env->value;
+	Value *lvalue = table_get(&env->env, name);
+	if (lvalue) {
+		return lvalue;
 	}
 	return env_lookup_raw(env->prev, name);
 }
@@ -1480,9 +1594,9 @@ env_lookup(InterpreterState *is, Identifier name)
 		// Name not found, should be a global whose
 		// definition we will yet see.
 		Value null = make_null();
-		Environment *fixup = make_env((*is->global_env)->prev, name, null);
-		(*is->global_env)->prev = fixup;
-		lvalue = &fixup->value;
+		// TODO: could be improved by having env_define return an lvalue
+		env_define(is->global_env, name, null);
+		return env_lookup_raw(is->global_env, name);
 	} else if (value_is_function(*lvalue)) {
 		return NULL;
 	}
@@ -1498,6 +1612,7 @@ env_lookup_func(Environment *env, Identifier name)
 	}
 	return NULL;
 }
+
 
 static Value interpreter_call_method(InterpreterState *is, Value object, bool function_call, Identifier method, Ast **ast_arguments, size_t argument_cnt);
 
@@ -1550,13 +1665,13 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 	case AST_FUNCTION: {
 		Value function = make_function_ast(ast);
-		is->env = make_env(is->env, ast->function.name, function);
+		env_define(is->env, ast->function.name, function);
 		return make_null();
 	}
 
 	case AST_VARIABLE: {
 		Value value = interpret(is, ast->variable.value);
-		is->env = make_env(is->env, ast->variable.name, value);
+		env_define(is->env, ast->function.name, value);
 		return value;
 	}
 
@@ -1623,27 +1738,32 @@ interpret(InterpreterState *is, Ast *ast)
 		}
 		builtin_print(ast->print.format, arguments, ast->print.argument_cnt);
 		free(arguments);
-		fflush(stdout);
 		return make_null();
 	}
 	case AST_BLOCK: {
-		Value dummy = make_null();
-		is->env = make_env(is->env, EMPTY, dummy);
+		AstBlock *block = &ast->block;
+		if (block->expression_cnt == 0) {
+			return make_null();
+		}
+
 		Environment *saved_env = is->env;
-		bool saved_in_global = is->in_global;
-		if (is->in_global && is->env->prev) {
-			// Hack for the top level
-			is->global_env = &saved_env;
-			is->in_global = false;
+		is->env = env_create(is->env);
+		Value value = interpret(is, block->expressions[0]);
+		for (size_t i = 1; i < block->expression_cnt; i++) {
+			value = interpret(is, block->expressions[i]);
 		}
-		Value value = make_null();
-		for (size_t i = 0; i < ast->block.expression_cnt; i++) {
-			value = interpret(is, ast->block.expressions[i]);
+		env_free(is->env);
+		is->env = saved_env;
+		return value;
+	}
+	case AST_TOP: {
+		AstTop *top = &ast->top;
+		if (top->expression_cnt == 0) {
+			return make_null();
 		}
-		is->env = saved_env->prev;
-		is->in_global = saved_in_global;
-		if (is->in_global) {
-			is->global_env = &is->env;
+		Value value = interpret(is, top->expressions[0]);
+		for (size_t i = 1; i < top->expression_cnt; i++) {
+			value = interpret(is, top->expressions[i]);
 		}
 		return value;
 	}
@@ -1663,7 +1783,8 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 
 	Ast *function;
 	if (function_call) {
-		function = env_lookup_func(*is->global_env, method);
+		// TODO: lookup functions in global_env if this is problematic
+		function = env_lookup_func(is->env, method);
 	} else {
 		Value *function_value = value_method(object, &object, method);
 		function = function_value ? value_as_function_ast(*function_value) : NULL;
@@ -1671,27 +1792,19 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 	if (function) {
 		assert(argument_cnt == function->function.parameter_cnt);
 
-		Environment *saved_env = is->env;
-		bool saved_in_global = is->in_global;
-		if (is->in_global) {
-			is->global_env = &saved_env;
-			is->in_global = false;
-		}
 		// Starting with _only_ the global environment, add the function
 		// arguments to the scope
-		is->env = *is->global_env;
+		Environment *saved_env = is->env;
+		is->env = env_create(is->global_env);
 		for (size_t i = 0; i < argument_cnt; i++) {
-			is->env = make_env(is->env, function->function.parameters[i], arguments[i]);
+			env_define(is->env, function->function.parameters[i], arguments[i]);
 		}
 		if (!function_call) {
-			is->env = make_env(is->env, THIS, object);
+			env_define(is->env, THIS, object);
 		}
 		return_value = interpret(is, function->function.body);
+		env_free(is->env);
 		is->env = saved_env;
-		is->in_global = saved_in_global;
-		if (is->in_global) {
-			is->global_env = &is->env;
-		}
 		return return_value;
 	} else {
 		return_value = value_call_primitive_method(object, method, &arguments[0], argument_cnt);
@@ -1699,99 +1812,6 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 	free(arguments);
 	return return_value;
 }
-
-// A simple hash table.
-// Inspired by: http://www.craftinginterpreters.com/hash-tables.html
-
-typedef struct {
-	Identifier key;
-	Value value;
-} Entry;
-
-typedef struct {
-	Entry *entries;
-	size_t entry_cnt;
-	size_t capacity;
-} Table;
-
-void
-table_init(Table *table, size_t capacity)
-{
-	table->entry_cnt = 0;
-	if (capacity == 0) {
-		table->capacity = 0;
-		table->entries = NULL;
-	} else {
-		table->capacity = 1;
-		while (table->capacity < capacity) {
-			table->capacity *= 2;
-		}
-		table->entries = calloc(table->capacity, sizeof(*table->entries));
-	}
-}
-
-Entry *
-table_find_entry(Entry *entries, size_t capacity, Identifier key)
-{
-	u64 hash = ident_hash(key);
-	// NOTE: We guarantee that the capacity is a power of two. The modulo
-	// operation thus simplifies to simple binary AND.
-	size_t mask = capacity - 1;
-	for (size_t index = hash & mask;; index = (index + 1) & mask) {
-		Entry *entry = &entries[index];
-		if (entry->key.name == NULL || ident_eq(entry->key, key)) {
-			return entry;
-		}
-	}
-}
-
-void
-table_grow(Table *table)
-{
-	size_t capacity = table->capacity ? table->capacity * 2 : 8;
-	// TODO: intialize memory if not zero allocated
-	Entry *entries = calloc(capacity, sizeof(*entries));
-	for (size_t i = 0; i < table->capacity; i++) {
-		Entry *old = &table->entries[i];
-		if (old->key.name == NULL) {
-			continue;
-		}
-		Entry *new = table_find_entry(entries, capacity, old->key);
-		*new = *old;
-	}
-	free(table->entries);
-	table->entries = entries;
-	table->capacity = capacity;
-}
-
-bool
-table_get(Table *table, Identifier key, Value *value)
-{
-	Entry *entry = table_find_entry(table->entries, table->capacity, key);
-	if (entry->key.name == NULL) {
-		return false;
-	}
-	*value = entry->value;
-	return true;
-}
-
-bool
-table_insert(Table *table, Identifier key, Value value)
-{
-	if (table->entry_cnt + 1 >= table->capacity / 2) {
-		table_grow(table);
-	}
-	Entry *entry = table_find_entry(table->entries, table->capacity, key);
-	bool new = entry->key.name == NULL;
-	if (new) {
-		table->entry_cnt += 1;
-		entry->key = key;
-	}
-	entry->value = value;
-	return new;
-}
-
-
 
 // Parse little endian numbers from byte array.Beware of implicit promotion from uint8_t to signed int.
 // https://commandcenter.blogspot.com/2012/04/byte-order-fallacy.html
@@ -2163,9 +2183,9 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		}
 		case OP_JUMP: {
 			Identifier name = constant_string(vm, &ip);
-			Value offset_value;
-			assert(table_get(&vm->label_offsets, name, &offset_value));
-			int32_t offset = value_as_integer(offset_value);
+			Value *offset_value = table_get(&vm->label_offsets, name);
+			assert(offset_value);
+			int32_t offset = value_as_integer(*offset_value);
 			ip = method->instruction_start + offset;
 			break;
 		}
@@ -2173,9 +2193,9 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Identifier name = constant_string(vm, &ip);
 			Value condition = vm->stack[vm->stack_pos--];
 			if (value_to_bool(condition)) {
-				Value offset_value;
-				assert(table_get(&vm->label_offsets, name, &offset_value));
-				int32_t offset = value_as_integer(offset_value);
+				Value *offset_value = table_get(&vm->label_offsets, name);
+				assert(offset_value);
+				int32_t offset = value_as_integer(*offset_value);
 				ip = method->instruction_start + offset;
 			}
 			break;
@@ -2254,11 +2274,10 @@ main(int argc, char **argv) {
 		Ast *ast = parse(buf, fsize);
 		assert(ast);
 
+		Environment *env = env_create(NULL);
 		InterpreterState is = {
-			.env = NULL,
-			.global_env = &is.env,
-			.in_global = true,
-
+			.env = env,
+			.global_env = env,
 		};
 		interpret(&is, ast);
 	} else if (strcmp(argv[1], "execute") == 0) {
