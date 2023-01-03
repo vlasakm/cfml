@@ -2837,6 +2837,108 @@ compile_ast(Program *program, Ast *ast)
 	program->entry_point = entry_point;
 }
 
+static void
+write_u32(FILE *f, u32 num)
+{
+	fputc(num >> 0, f);
+	fputc(num >> 8, f);
+	fputc(num >> 16, f);
+	fputc(num >> 24, f);
+}
+
+static void
+write_u16(FILE *f, u16 num)
+{
+	fputc(num >> 0, f);
+	fputc(num >> 8, f);
+}
+
+static void
+write_u8(FILE *f, u8 num)
+{
+	fputc(num, f);
+}
+
+static void
+write_class(FILE *f, u8 *class)
+{
+	u16 member_cnt = read_u16(&class);
+	write_u16(f, member_cnt);
+	fwrite(class, member_cnt, 2, f);
+}
+
+
+static void
+write_constant(FILE *f, Constant *constant)
+{
+	write_u8(f, constant->kind);
+	switch (constant->kind) {
+	case CK_NULL:
+		break;
+	case CK_BOOLEAN: {
+		write_u8(f, (u8) constant->boolean);
+		break;
+	}
+	case CK_INTEGER:
+		write_u32(f, constant->integer);
+		break;
+	case CK_STRING:
+		write_u32(f, constant->string.len);
+		fwrite(constant->string.name, constant->string.len, 1, f);
+		break;
+	case CK_METHOD:
+		write_u16(f, constant->method.name);
+		write_u8(f, constant->method.parameter_cnt);
+		write_u16(f, constant->method.local_cnt);
+		size_t instruction_cnt = 0;
+		for (size_t i = 0; i < constant->method.instruction_len; i++) {
+			instruction_cnt += 1;
+			switch (constant->method.instruction_start[i]) {
+			case OP_LITERAL: i += 2; break;
+			case OP_ARRAY: break;
+			case OP_OBJECT: i += 2; break;
+			case OP_GET_LOCAL: i += 2; break;
+			case OP_SET_LOCAL: i += 2; break;
+			case OP_GET_GLOBAL: i += 2; break;
+			case OP_SET_GLOBAL: i += 2; break;
+			case OP_GET_FIELD: i += 2; break;
+			case OP_SET_FIELD: i += 2; break;
+			case OP_LABEL: i += 2; break;
+			case OP_JUMP: i += 2; break;
+			case OP_BRANCH: i += 2; break;
+			case OP_CALL_FUNCTION: i += 3; break;
+			case OP_CALL_METHOD: i += 3; break;
+			case OP_PRINT: i += 3; break;
+			case OP_DROP:  break;
+			case OP_RETURN: break;
+			}
+		}
+		write_u32(f, instruction_cnt);
+		fwrite(constant->method.instruction_start, constant->method.instruction_len, 1, f);
+		break;
+	case CK_SLOT:
+		write_u16(f, constant->slot);
+		break;
+	case CK_CLASS: {
+		write_class(f, constant->class.start);
+		break;
+	}
+	default:
+		assert(false);
+	}
+}
+
+void
+write_program(Program *program, FILE *f)
+{
+	write_u16(f, program->constant_cnt);
+	for (size_t i = 0; i < program->constant_cnt; i++) {
+		write_constant(f, &program->constants[i]);
+	}
+	write_class(f, program->global_class);
+	write_u16(f, program->entry_point);
+}
+
 int
 main(int argc, char **argv) {
 	if(argc != 3) {
@@ -2863,10 +2965,27 @@ main(int argc, char **argv) {
 		assert(ast);
 		Program program;
 		compile_ast(&program, ast);
-		vm_run(&program);
+		write_program(&program, stdout);
+		fflush(stdout);
+	} else if (strcmp(argv[1], "serde") == 0) {
+		Ast *ast = parse(buf, fsize);
+		assert(ast);
+		Program program;
+		compile_ast(&program, ast);
+		FILE *f = fopen("out.bc", "wb");
+		write_program(&program, f);
+		fclose(f);
+		f = fopen("out.bc", "rb");
+		fseek(f, 0, SEEK_END);
+		long fsize = ftell(f);
+		fseek(f, 0, SEEK_SET);
+		u8 *buf = malloc(fsize);
+		fread(buf, fsize, 1, f);
+		fclose(f);
+		Program program2;
+		read_program(&program2, buf, fsize);
+		vm_run(&program2);
 	}
-
-
 	free(buf);
 	return 0;
 }
