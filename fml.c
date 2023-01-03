@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -2340,6 +2341,7 @@ typedef struct {
 	bool in_block;
 	Environment *env;
 	u16 local_cnt;
+	size_t label_cnt;
 } CompilerState;
 
 void
@@ -2403,8 +2405,66 @@ void
 add_call_method(CompilerState *cs, Identifier name, u8 argument_cnt)
 {
 	inst_write_u8(cs, OP_CALL_METHOD);
-	add_string(cs, name);
+	inst_string(cs, name);
 	inst_write_u8(cs, argument_cnt);
+}
+
+void
+literal(CompilerState *cs, Constant constant)
+{
+	inst_write_u8(cs, OP_LITERAL);
+	inst_constant(cs, constant);
+}
+
+void
+null(CompilerState *cs)
+{
+	inst_write_u8(cs, OP_LITERAL);
+	inst_constant(cs, (Constant) { .kind = CK_NULL });
+}
+
+void
+drop(CompilerState *cs)
+{
+	inst_write_u8(cs, OP_DROP);
+}
+
+u16
+label_reserve(CompilerState *cs)
+{
+	Identifier label;
+	label.len = asprintf((void*) &label.name, "L%zu", cs->label_cnt);
+	cs->label_cnt += 1;
+	return add_string(cs, label);
+}
+
+void
+label_insert(CompilerState *cs, u16 label)
+{
+	inst_write_u8(cs, OP_LABEL);
+	inst_write_u16(cs, label);
+}
+
+u16
+label(CompilerState *cs)
+{
+	u16 label = label_reserve(cs);
+	label_insert(cs, label);
+	return label;
+}
+
+void
+jump(CompilerState *cs, u16 label)
+{
+	inst_write_u8(cs, OP_JUMP);
+	inst_write_u16(cs, label);
+}
+
+void
+branch(CompilerState *cs, u16 label)
+{
+	inst_write_u8(cs, OP_BRANCH);
+	inst_write_u16(cs, label);
 }
 
 static void
@@ -2452,6 +2512,7 @@ compile(CompilerState *cs, Ast *ast)
 		grow(&cs->members, &cs->member_cnt, &cs->member_capacity, 1, sizeof(*cs->members));
 		cs->member_cnt++;
 
+		cs->in_object = true;
 		for (size_t i = 0; i < object->member_cnt; i++) {
 			Ast *ast_member = object->members[i];
 			switch (ast_member->kind) {
@@ -2483,14 +2544,17 @@ compile(CompilerState *cs, Ast *ast)
 		size_t saved_instruction_cnt = cs->instruction_cnt;
 		size_t saved_instruction_capacity = cs->instruction_capacity;
 		bool saved_in_block = cs->in_block;
+		bool saved_in_object = cs->in_object;
 
-		cs->env = env_create(cs->env);
 		cs->instructions = NULL;
 		cs->instruction_cnt = 0;
 		cs->instruction_capacity = 0;
 		cs->local_cnt = 0;
 		cs->in_block = false;
-		if (cs->in_object) {
+		cs->in_object = false;
+
+		cs->env = env_create(cs->env);
+		if (saved_in_object) {
 			env_define(cs->env, THIS, make_integer(cs->local_cnt));
 			cs->local_cnt += 1;
 		}
@@ -2508,7 +2572,7 @@ compile(CompilerState *cs, Ast *ast)
 		       .method = (CMethod) {
 				.name = name_constant,
 				.local_cnt = cs->local_cnt,
-				.parameter_cnt = function->parameter_cnt,
+				.parameter_cnt = function->parameter_cnt + !!saved_in_object,
 				.instruction_start = cs->instructions,
 				.instruction_len = cs->instruction_cnt,
 			},
@@ -2521,6 +2585,7 @@ compile(CompilerState *cs, Ast *ast)
 		cs->instruction_capacity = saved_instruction_capacity;
 		cs->local_cnt = saved_local_cnt;
 		cs->in_block = saved_in_block;
+		cs->in_object = saved_in_object;
 		if (!cs->in_object) {
 			inst_write_u8(cs, OP_LITERAL);
 			inst_constant(cs, (Constant) { .kind = CK_NULL });
@@ -2631,11 +2696,36 @@ compile(CompilerState *cs, Ast *ast)
 	}
 
 	case AST_IF: {
-		// TODO
+		AstConditional *conditional = &ast->conditional;
+		u16 consequent_label = label_reserve(cs);
+		u16 alternative_label = label_reserve(cs);
+		u16 after_label = label_reserve(cs);
+		compile(cs, conditional->condition);
+		branch(cs, consequent_label);
+		jump(cs, alternative_label);
+		label_insert(cs, consequent_label);
+		compile(cs, conditional->consequent);
+		jump(cs, after_label);
+		label_insert(cs, alternative_label);
+		compile(cs, conditional->alternative);
+		label_insert(cs, after_label);
 		return;
 	}
 	case AST_WHILE: {
-		// TODO
+		AstLoop *loop = &ast->loop;
+		null(cs);
+                u16 condition_label = label(cs);
+                u16 body_label = label_reserve(cs);
+                u16 after_label = label_reserve(cs);
+                compile(cs, loop->condition);
+                branch(cs, body_label);
+                jump(cs, after_label);
+                label_insert(cs, body_label);
+                // Drop value from previous iteration (or the initial null)
+                drop(cs);
+                compile(cs, loop->body);
+                jump(cs, condition_label);
+                label_insert(cs, after_label);
 		return;
 	}
 	case AST_PRINT: {
