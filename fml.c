@@ -2850,14 +2850,6 @@ main(int argc, char **argv) {
 	fread(buf, fsize, 1, f);
 	fclose(f);
 
-	//Lexer lexer = lex_init(buf, fsize);
-	//for (;;) {
-	//	Token tok;
-	//	lex_next(&lexer, &tok);
-	//	if (/*tok.kind == TK_ERROR ||*/ tok.kind == TK_EOF)
-	//		break;
-	//}
-
 	if (strcmp(argv[1], "run") == 0) {
 		Ast *ast = parse(buf, fsize);
 		assert(ast);
