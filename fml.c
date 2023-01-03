@@ -2094,17 +2094,19 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 	CMethod *method = &method_constant->method;
 	assert(argument_cnt == method->parameter_cnt);
 
-	size_t total_cnt = argument_cnt + method->local_cnt;
+	size_t local_cnt = method->local_cnt;
 	size_t saved_bp = vm->bp;
 	vm->bp = vm->frame_stack_pos;
-	vm->frame_stack_pos += total_cnt;
+	vm->frame_stack_pos += local_cnt;
 
+	Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
+	vm->stack_pos -= argument_cnt;
+	Value *locals = &vm->frame_stack[vm->bp];
 	for (size_t i = 0; i < argument_cnt; i++) {
-		Value value = vm->stack[vm->stack_pos--];
-		vm->frame_stack[vm->bp + (argument_cnt - 1 - i)] = value;
+		locals[i] = arguments[i];
 	}
-	for (size_t i = argument_cnt; i < total_cnt; i++) {
-		vm->frame_stack[vm->bp + (argument_cnt - 1 - i)] = make_null();
+	for (size_t i = argument_cnt; i < local_cnt; i++) {
+		locals[i] = make_null();
 	}
 
 	u8 *ip = method->instruction_start;
@@ -2154,14 +2156,12 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		}
 		case OP_GET_LOCAL: {
 			u16 local_index = read_u16(&ip);
-			Value *lvalue = &vm->frame_stack[vm->bp + local_index];
-			vm->stack[++vm->stack_pos] = *lvalue;
+			vm->stack[++vm->stack_pos] = locals[local_index];
 			break;
 		}
 		case OP_SET_LOCAL: {
 			u16 local_index = read_u16(&ip);
-			Value *lvalue = &vm->frame_stack[vm->bp + local_index];
-			*lvalue = vm->stack[vm->stack_pos];
+			locals[local_index] = vm->stack[vm->stack_pos];
 			break;
 		}
 		case OP_GET_GLOBAL: {
