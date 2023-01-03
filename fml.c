@@ -1924,7 +1924,7 @@ typedef struct {
 	u16 entry_point;
 } Program;
 
-u8 *
+static u8 *
 read_class(u8 **input)
 {
 	u8 *class_start = *input;
@@ -1935,7 +1935,7 @@ read_class(u8 **input)
 	return class_start;
 }
 
-void
+static void
 read_constant(u8 **input, Constant *constant)
 {
 	ConstantKind kind = read_u8(input);
@@ -1999,7 +1999,7 @@ read_constant(u8 **input, Constant *constant)
 	}
 }
 
-bool
+static bool
 read_program(Program *program, u8 *input, size_t input_len)
 {
 	assert(input_len >= 2);
@@ -2086,7 +2086,7 @@ vm_instantiate_class(VM *vm, u8 *class, Value (*make_value)(VM *vm))
 	return object_value;
 }
 
-void
+static void
 vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 {
 	Constant *method_constant = &vm->program->constants[method_index];
@@ -2346,7 +2346,7 @@ typedef struct {
 	size_t label_cnt;
 } CompilerState;
 
-void
+static void
 grow(void **array, size_t *cnt, size_t *capacity, size_t new_elems, size_t elem_size)
 {
 	if (*cnt + new_elems > *capacity) {
@@ -2356,14 +2356,14 @@ grow(void **array, size_t *cnt, size_t *capacity, size_t new_elems, size_t elem_
 	}
 }
 
-void
+static void
 inst_write_u8(CompilerState *cs, u8 b)
 {
 	grow(&cs->instructions, &cs->instruction_cnt, &cs->instruction_capacity, 1, sizeof(*cs->instructions));
 	cs->instructions[cs->instruction_cnt++] = b;
 }
 
-void
+static void
 inst_write_u16(CompilerState *cs, u16 b)
 {
 	grow(&cs->instructions, &cs->instruction_cnt, &cs->instruction_capacity, 2, sizeof(*cs->instructions));
@@ -2372,7 +2372,7 @@ inst_write_u16(CompilerState *cs, u16 b)
 	cs->instruction_cnt += 2;
 }
 
-u16
+static u16
 add_constant(CompilerState *cs, Constant constant)
 {
 	grow(&cs->constants, &cs->constant_cnt, &cs->constant_capacity, 1, sizeof(*cs->constants));
@@ -2382,7 +2382,7 @@ add_constant(CompilerState *cs, Constant constant)
 	return index & 0xFFFF;
 }
 
-u16
+static u16
 add_string(CompilerState *cs, Identifier name)
 {
 	return add_constant(cs, (Constant) {
@@ -2391,54 +2391,54 @@ add_string(CompilerState *cs, Identifier name)
 	});
 }
 
-void
+static void
 inst_constant(CompilerState *cs, Constant constant)
 {
 	inst_write_u16(cs, add_constant(cs, constant));
 }
 
-void
+static void
 inst_string(CompilerState *cs, Identifier name)
 {
 	inst_write_u16(cs, add_string(cs, name));
 }
 
-void
-add_call_method(CompilerState *cs, Identifier name, u8 argument_cnt)
-{
-	inst_write_u8(cs, OP_CALL_METHOD);
-	inst_string(cs, name);
-	inst_write_u8(cs, argument_cnt);
-}
-
-void
+static void
 literal(CompilerState *cs, Constant constant)
 {
 	inst_write_u8(cs, OP_LITERAL);
 	inst_constant(cs, constant);
 }
 
-void
-null(CompilerState *cs)
+static void
+op(CompilerState *cs, OpCode op)
 {
-	inst_write_u8(cs, OP_LITERAL);
-	inst_constant(cs, (Constant) { .kind = CK_NULL });
+	inst_write_u8(cs, op);
 }
 
-void
+static void
 op_index(CompilerState *cs, OpCode op, u16 index)
 {
 	inst_write_u8(cs, op);
 	inst_write_u16(cs, index);
 }
 
-void
-drop(CompilerState *cs)
+static void
+op_string(CompilerState *cs, OpCode op, Identifier string)
 {
-	inst_write_u8(cs, OP_DROP);
+	inst_write_u8(cs, op);
+	inst_string(cs, string);
 }
 
-u16
+static void
+op_string_cnt(CompilerState *cs, OpCode op, Identifier string, u8 count)
+{
+	inst_write_u8(cs, op);
+	inst_string(cs, string);
+	inst_write_u8(cs, count);
+}
+
+static u16
 label_reserve(CompilerState *cs)
 {
 	Identifier label;
@@ -2447,55 +2447,23 @@ label_reserve(CompilerState *cs)
 	return add_string(cs, label);
 }
 
-void
-label_insert(CompilerState *cs, u16 label)
-{
-	inst_write_u8(cs, OP_LABEL);
-	inst_write_u16(cs, label);
-}
-
-u16
-label(CompilerState *cs)
-{
-	u16 label = label_reserve(cs);
-	label_insert(cs, label);
-	return label;
-}
-
-void
-jump(CompilerState *cs, u16 label)
-{
-	inst_write_u8(cs, OP_JUMP);
-	inst_write_u16(cs, label);
-}
-
-void
-branch(CompilerState *cs, u16 label)
-{
-	inst_write_u8(cs, OP_BRANCH);
-	inst_write_u16(cs, label);
-}
-
 static void
 compile(CompilerState *cs, Ast *ast)
 {
 	switch (ast->kind) {
 	case AST_NULL: {
-		inst_write_u8(cs, OP_LITERAL);
-		inst_constant(cs, (Constant) { .kind = CK_NULL });
+		literal(cs, (Constant) { .kind = CK_NULL });
 		return;
 	}
 	case AST_BOOLEAN: {
-		inst_write_u8(cs, OP_LITERAL);
-		inst_constant(cs, (Constant) {
+		literal(cs, (Constant) {
 		       .kind = CK_BOOLEAN,
 		       .boolean = ast->boolean.value,
 		});
 		return;
 	}
 	case AST_INTEGER: {
-		inst_write_u8(cs, OP_LITERAL);
-		inst_constant(cs, (Constant) {
+		literal(cs, (Constant) {
 		       .kind = CK_INTEGER,
 		       .integer = ast->integer.value,
 		});
@@ -2512,7 +2480,7 @@ compile(CompilerState *cs, Ast *ast)
 		case AST_VARIABLE_ACCESS:
 			compile(cs, array->size);
 			compile(cs, array->initializer);
-			inst_write_u8(cs, OP_ARRAY);
+			op(cs, OP_ARRAY);
 			return;
 		default:;
 		}
@@ -2523,33 +2491,35 @@ compile(CompilerState *cs, Ast *ast)
 
 		literal(cs, (Constant) { .kind = CK_INTEGER, .integer = 0 });
 		op_index(cs, OP_SET_LOCAL, i_var);
-		drop(cs);
+		op(cs, OP_DROP);
 
 		compile(cs, array->size);
 		op_index(cs, OP_SET_LOCAL, size_var);
 		// Dummy initializer
-		null(cs);
-		inst_write_u8(cs, OP_ARRAY);
+		literal(cs, (Constant) { .kind = CK_NULL });
+		op(cs, OP_ARRAY);
 		op_index(cs, OP_SET_LOCAL, array_var);
 
-		u16 cond_label = label(cs);
+		u16 cond_label = label_reserve(cs);
 		u16 init_label = label_reserve(cs);
 		u16 after_label = label_reserve(cs);
+
+		op_index(cs, OP_LABEL, cond_label);
 		op_index(cs, OP_GET_LOCAL, i_var);
 		op_index(cs, OP_GET_LOCAL, size_var);
-		add_call_method(cs, LESS, 2);
+		op_string_cnt(cs, OP_CALL_METHOD, LESS, 2);
 		op_index(cs, OP_BRANCH, init_label);
 		op_index(cs, OP_JUMP, after_label);
 		op_index(cs, OP_LABEL, init_label);
 		op_index(cs, OP_GET_LOCAL, i_var);
 		compile(cs, array->initializer);
-		add_call_method(cs, SET, 3);
-		drop(cs);
+		op_string_cnt(cs, OP_CALL_METHOD, SET, 3);
+		op(cs, OP_DROP);
 		op_index(cs, OP_GET_LOCAL, i_var);
 		literal(cs, (Constant) { .kind = CK_INTEGER, .integer = 1 });
-		add_call_method(cs, PLUS, 2);
+		op_string_cnt(cs, OP_CALL_METHOD, PLUS, 2);
 		op_index(cs, OP_SET_LOCAL, i_var);
-		drop(cs);
+		op(cs, OP_DROP);
 		op_index(cs, OP_GET_LOCAL, array_var);
 		op_index(cs, OP_JUMP, cond_label);
 		op_index(cs, OP_LABEL, after_label);
@@ -2581,7 +2551,7 @@ compile(CompilerState *cs, Ast *ast)
 			}
 		}
 		cs->members[0] = cs->member_cnt - 1;
-		inst_write_u8(cs, OP_OBJECT);
+		op(cs, OP_OBJECT);
 		inst_constant(cs, (Constant) {
 		       .kind = CK_CLASS,
 		       .class = (Class) { .start = (u8*) cs->members, },
@@ -2590,7 +2560,7 @@ compile(CompilerState *cs, Ast *ast)
 		cs->members = saved_members;
 		cs->member_cnt = saved_members_cnt;
 		cs->member_capacity = saved_members_capacity;
-		break;
+		return;
 	}
 	case AST_FUNCTION: {
 		AstFunction *function = &ast->function;
@@ -2619,7 +2589,7 @@ compile(CompilerState *cs, Ast *ast)
 			cs->local_cnt += 1;
 		}
 		compile(cs, function->body);
-		inst_write_u8(cs, OP_RETURN);
+		op(cs, OP_RETURN);
 		env_free(cs->env);
 
 		u16 name_constant = add_string(cs, function->name);
@@ -2643,8 +2613,7 @@ compile(CompilerState *cs, Ast *ast)
 		cs->in_block = saved_in_block;
 		cs->in_object = saved_in_object;
 		if (!cs->in_object) {
-			inst_write_u8(cs, OP_LITERAL);
-			inst_constant(cs, (Constant) { .kind = CK_NULL });
+			literal(cs, (Constant) { .kind = CK_NULL });
 		}
 		return;
 	}
@@ -2661,13 +2630,11 @@ compile(CompilerState *cs, Ast *ast)
 			grow(&cs->members, &cs->member_cnt, &cs->member_capacity, 1, sizeof(*cs->members));
 			cs->members[cs->member_cnt++] = slot;
 			if (!cs->in_object) {
-				inst_write_u8(cs, OP_SET_GLOBAL);
-				inst_string(cs, variable->name);
+				op_string(cs, OP_SET_GLOBAL, variable->name);
 			}
 		} else {
 			env_define(cs->env, variable->name, make_integer(cs->local_cnt));
-			inst_write_u8(cs, OP_SET_LOCAL);
-			inst_write_u16(cs, cs->local_cnt);
+			op_index(cs, OP_SET_LOCAL, cs->local_cnt);
 			cs->local_cnt += 1;
 		}
 		return;
@@ -2677,11 +2644,9 @@ compile(CompilerState *cs, Ast *ast)
 		AstVariableAccess *variable_access = &ast->variable_access;
 		Value *local_index = env_lookup_raw(cs->env, variable_access->name);
 		if (local_index) {
-			inst_write_u8(cs, OP_GET_LOCAL);
-			inst_write_u16(cs, value_as_integer(*local_index));
+			op_index(cs, OP_GET_LOCAL, value_as_integer(*local_index));
 		} else {
-			inst_write_u8(cs, OP_GET_GLOBAL);
-			inst_string(cs, variable_access->name);
+			op_string(cs, OP_GET_GLOBAL, variable_access->name);
 		}
 		return;
 	}
@@ -2690,11 +2655,9 @@ compile(CompilerState *cs, Ast *ast)
 		compile(cs, variable_assignment->value);
 		Value *local_index = env_lookup_raw(cs->env, variable_assignment->name);
 		if (local_index) {
-			inst_write_u8(cs, OP_SET_LOCAL);
-			inst_write_u16(cs, value_as_integer(*local_index));
+			op_index(cs, OP_SET_LOCAL, value_as_integer(*local_index));
 		} else {
-			inst_write_u8(cs, OP_SET_GLOBAL);
-			inst_string(cs, variable_assignment->name);
+			op_string(cs, OP_SET_GLOBAL, variable_assignment->name);
 		}
 		return;
 	}
@@ -2703,7 +2666,7 @@ compile(CompilerState *cs, Ast *ast)
 		AstIndexAccess *index_access = &ast->index_access;
 		compile(cs, index_access->object);
 		compile(cs, index_access->index);
-		add_call_method(cs, GET, 2);
+		op_string_cnt(cs, OP_CALL_METHOD, GET, 2);
 		return;
 	}
 	case AST_INDEX_ASSIGNMENT: {
@@ -2711,23 +2674,21 @@ compile(CompilerState *cs, Ast *ast)
 		compile(cs, index_assignment->object);
 		compile(cs, index_assignment->index);
 		compile(cs, index_assignment->value);
-		add_call_method(cs, SET, 3);
+		op_string_cnt(cs, OP_CALL_METHOD, SET, 3);
 		return;
 	}
 
 	case AST_FIELD_ACCESS: {
 		AstFieldAccess *field_access = &ast->field_access;
 		compile(cs, field_access->object);
-		inst_write_u8(cs, OP_GET_FIELD);
-		inst_string(cs, field_access->field);
+		op_string(cs, OP_GET_FIELD, field_access->field);
 		return;
 	}
 	case AST_FIELD_ASSIGNMENT: {
 		AstFieldAssignment *field_assignment = &ast->field_assignment;
 		compile(cs, field_assignment->object);
 		compile(cs, field_assignment->value);
-		inst_write_u8(cs, OP_SET_FIELD);
-		inst_string(cs, field_assignment->field);
+		op_string(cs, OP_SET_FIELD, field_assignment->field);
 		return;
 	}
 
@@ -2736,9 +2697,7 @@ compile(CompilerState *cs, Ast *ast)
 		for (size_t i = 0; i < function_call->argument_cnt; i++) {
 			compile(cs, function_call->arguments[i]);
 		}
-		inst_write_u8(cs, OP_CALL_FUNCTION);
-		inst_string(cs, function_call->name);
-		inst_write_u8(cs, function_call->argument_cnt);
+		op_string_cnt(cs, OP_CALL_FUNCTION, function_call->name, function_call->argument_cnt);
 		return;
 	}
 	case AST_METHOD_CALL: {
@@ -2747,7 +2706,7 @@ compile(CompilerState *cs, Ast *ast)
 		for (size_t i = 0; i < method_call->argument_cnt; i++) {
 			compile(cs, method_call->arguments[i]);
 		}
-		add_call_method(cs, method_call->name, method_call->argument_cnt + 1);
+		op_string_cnt(cs, OP_CALL_METHOD, method_call->name, method_call->argument_cnt + 1);
 		return;
 	}
 
@@ -2757,31 +2716,33 @@ compile(CompilerState *cs, Ast *ast)
 		u16 alternative_label = label_reserve(cs);
 		u16 after_label = label_reserve(cs);
 		compile(cs, conditional->condition);
-		branch(cs, consequent_label);
-		jump(cs, alternative_label);
-		label_insert(cs, consequent_label);
+		op_index(cs, OP_BRANCH, consequent_label);
+		op_index(cs, OP_JUMP, alternative_label);
+		op_index(cs, OP_LABEL, consequent_label);
 		compile(cs, conditional->consequent);
-		jump(cs, after_label);
-		label_insert(cs, alternative_label);
+		op_index(cs, OP_JUMP, after_label);
+		op_index(cs, OP_LABEL, alternative_label);
 		compile(cs, conditional->alternative);
-		label_insert(cs, after_label);
+		op_index(cs, OP_LABEL, after_label);
 		return;
 	}
 	case AST_WHILE: {
 		AstLoop *loop = &ast->loop;
-		null(cs);
-                u16 condition_label = label(cs);
-                u16 body_label = label_reserve(cs);
-                u16 after_label = label_reserve(cs);
-                compile(cs, loop->condition);
-                branch(cs, body_label);
-                jump(cs, after_label);
-                label_insert(cs, body_label);
-                // Drop value from previous iteration (or the initial null)
-                drop(cs);
-                compile(cs, loop->body);
-                jump(cs, condition_label);
-                label_insert(cs, after_label);
+		u16 condition_label = label_reserve(cs);
+		u16 body_label = label_reserve(cs);
+		u16 after_label = label_reserve(cs);
+
+		literal(cs, (Constant) { .kind = CK_NULL });
+		op_index(cs, OP_LABEL, condition_label);
+		compile(cs, loop->condition);
+		op_index(cs, OP_BRANCH, body_label);
+		op_index(cs, OP_JUMP, after_label);
+		op_index(cs, OP_LABEL, body_label);
+		// Drop value from previous iteration (or the initial null)
+		op(cs, OP_DROP);
+		compile(cs, loop->body);
+		op_index(cs, OP_JUMP, condition_label);
+		op_index(cs, OP_LABEL, after_label);
 		return;
 	}
 	case AST_PRINT: {
@@ -2789,9 +2750,7 @@ compile(CompilerState *cs, Ast *ast)
 		for (size_t i = 0; i < print->argument_cnt; i++) {
 			compile(cs, print->arguments[i]);
 		}
-		inst_write_u8(cs, OP_PRINT);
-		inst_string(cs, print->format);
-		inst_write_u8(cs, print->argument_cnt);
+		op_string_cnt(cs, OP_PRINT, print->format, print->argument_cnt);
 		return;
 	}
 	case AST_BLOCK: {
@@ -2801,13 +2760,12 @@ compile(CompilerState *cs, Ast *ast)
 		cs->env = env_create(cs->env);
 		AstBlock *block = &ast->block;
 		if (block->expression_cnt == 0) {
-			inst_write_u8(cs, OP_LITERAL);
-			inst_constant(cs, (Constant) { .kind = CK_NULL });
+			literal(cs, (Constant) { .kind = CK_NULL });
 			return;
 		}
 		compile(cs, block->expressions[0]);
 		for (size_t i = 1; i < block->expression_cnt; i++) {
-			inst_write_u8(cs, OP_DROP);
+			op(cs, OP_DROP);
 			compile(cs, block->expressions[i]);
 		}
 		env_free(cs->env);
@@ -2818,19 +2776,18 @@ compile(CompilerState *cs, Ast *ast)
 	case AST_TOP: {
 		AstTop *top = &ast->top;
 		if (top->expression_cnt == 0) {
-			inst_write_u8(cs, OP_LITERAL);
-			inst_constant(cs, (Constant) { .kind = CK_NULL });
+			literal(cs, (Constant) { .kind = CK_NULL });
 			return;
 		}
 		compile(cs, top->expressions[0]);
 		for (size_t i = 1; i < top->expression_cnt; i++) {
-			inst_write_u8(cs, OP_DROP);
+			op(cs, OP_DROP);
 			compile(cs, top->expressions[i]);
 		}
 		return;
 	}
 	}
-	//UNREACHABLE();
+	UNREACHABLE();
 }
 
 void
