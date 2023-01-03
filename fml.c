@@ -1902,7 +1902,9 @@ typedef struct {
 } CMethod;
 
 typedef struct {
-	u8 *start;
+	// Can't be u16 * due to alignment problems
+	u8 *members;
+	u16 member_cnt;
 } Class;
 
 typedef struct {
@@ -1920,19 +1922,18 @@ typedef struct {
 typedef struct {
 	Constant *constants;
 	size_t constant_cnt;
-	u8 *global_class;
+	Class global_class;
 	u16 entry_point;
 } Program;
 
-static u8 *
-read_class(u8 **input)
+static void
+read_class(u8 **input, Class *class)
 {
-	u8 *class_start = *input;
-	size_t member_cnt = read_u16(input);
-	for (size_t i = 0; i < member_cnt; i++) {
+	class->member_cnt = read_u16(input);
+	class->members = *input;
+	for (size_t i = 0; i < class->member_cnt; i++) {
 		read_u16(input);
 	}
-	return class_start;
 }
 
 static void
@@ -1990,8 +1991,7 @@ read_constant(u8 **input, Constant *constant)
 		constant->slot = read_u16(input);
 		break;
 	case CK_CLASS: {
-		Class *class = &constant->class;
-		class->start = read_class(input);
+		read_class(input, &constant->class);
 		break;
 	}
 	default:
@@ -2008,7 +2008,7 @@ read_program(Program *program, u8 *input, size_t input_len)
 	for (size_t i = 0; i < program->constant_cnt; i++) {
 		read_constant(&input, &program->constants[i]);
 	}
-	program->global_class = read_class(&input);
+	read_class(&input, &program->global_class);
 	program->entry_point = read_u16(&input);
 	return true;
 }
@@ -2050,19 +2050,17 @@ constant_string(VM * vm, u8 **ip)
 }
 
 static Value
-vm_instantiate_class(VM *vm, u8 *class, Value (*make_value)(VM *vm))
+vm_instantiate_class(VM *vm, Class *class, Value (*make_value)(VM *vm))
 {
-	size_t member_cnt = read_u16(&class);
-	u16 *members = (void*) class;
-
-	Value object_value = make_object(member_cnt);
+	Value object_value = make_object(class->member_cnt);
 	Object *object = value_as_object(object_value);
 	Constant *constants = vm->program->constants;
 
-	for (size_t i = member_cnt; i--;) {
-		u8 *constant_index_pos = (void *) &members[i];
-		u16 constant_index = read_u16(&constant_index_pos);
-		Constant *constant = &constants[constant_index];
+	u16 *members = (u16 *) class->members;
+	for (size_t i = class->member_cnt; i--;) {
+		u8 *member_pos = (u8 *) &members[i];
+		u16 member = read_u16(&member_pos);
+		Constant *constant = &constants[member];
 		switch (constant->kind) {
 		case CK_SLOT: {
 			Constant *name = &constants[constant->slot];
@@ -2075,7 +2073,7 @@ vm_instantiate_class(VM *vm, u8 *class, Value (*make_value)(VM *vm))
 			Constant *name = &constants[constant->method.name];
 			assert(name->kind == CK_STRING);
 			object->fields[i].name = name->string;
-			object->fields[i].value = make_function_bc(constant_index);
+			object->fields[i].value = make_function_bc(member);
 			break;
 		}
 		default:
@@ -2149,8 +2147,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			u16 constant_index = read_u16(&ip);
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_CLASS);
-			Class *class = &constant->class;
-			Value object = vm_instantiate_class(vm, class->start, vm_pop_value);
+			Value object = vm_instantiate_class(vm, &constant->class, vm_pop_value);
 			vm->stack[++vm->stack_pos] = object;
 			break;
 		}
@@ -2323,7 +2320,7 @@ vm_run(Program *program)
 		.frame_stack_len = 1024,
 		.bp = 0,
 	};
-	vm.global = vm_instantiate_class(&vm, program->global_class, make_null_vm);
+	vm.global = vm_instantiate_class(&vm, &program->global_class, make_null_vm);
 	vm_call_method(&vm, program->entry_point, 0);
 	// Check that the program left exactly one value on the stack
 	assert(vm.stack_pos == 0);
@@ -2535,8 +2532,6 @@ compile(CompilerState *cs, Ast *ast)
 		cs->members = NULL;
 		cs->member_cnt = 0;
 		cs->member_capacity = 0;
-		grow(&cs->members, &cs->member_cnt, &cs->member_capacity, 1, sizeof(*cs->members));
-		cs->member_cnt++;
 
 		cs->in_object = true;
 		for (size_t i = 0; i < object->member_cnt; i++) {
@@ -2550,11 +2545,13 @@ compile(CompilerState *cs, Ast *ast)
 				assert(false);
 			}
 		}
-		cs->members[0] = cs->member_cnt - 1;
 		op(cs, OP_OBJECT);
 		inst_constant(cs, (Constant) {
 		       .kind = CK_CLASS,
-		       .class = (Class) { .start = (u8*) cs->members, },
+		       .class = (Class) {
+				.member_cnt = cs->member_cnt,
+				.members = (u8 *) cs->members,
+			},
 		});
 		cs->in_object = saved_in_object;
 		cs->members = saved_members;
@@ -2809,9 +2806,6 @@ compile_ast(Program *program, Ast *ast)
 		.local_cnt = 0,
 	};
 
-	grow(&cs.members, &cs.member_cnt, &cs.member_capacity, 1, sizeof(*cs.members));
-	cs.member_cnt++;
-
 	compile(&cs, ast);
 
 	Identifier program_name = {
@@ -2829,11 +2823,14 @@ compile_ast(Program *program, Ast *ast)
 			.instruction_len = cs.instruction_cnt,
 		},
 	});
-	cs.members[0] = cs.member_cnt - 1;
 
 	program->constants = cs.constants;
 	program->constant_cnt = cs.constant_cnt;
-	program->global_class = (u8 *) cs.members;
+	program->global_class = (Class) {
+		.members = (u8 *) cs.members,
+		.member_cnt = cs.member_cnt,
+	},
+
 	program->entry_point = entry_point;
 }
 
@@ -2860,11 +2857,14 @@ write_u8(FILE *f, u8 num)
 }
 
 static void
-write_class(FILE *f, u8 *class)
+write_class(FILE *f, Class *class)
 {
-	u16 member_cnt = read_u16(&class);
-	write_u16(f, member_cnt);
-	fwrite(class, member_cnt, 2, f);
+	write_u16(f, class->member_cnt);
+	u8 *members = class->members;
+	for (size_t i = 0; i < class->member_cnt; i++) {
+		u16 member = read_u16(&members);
+		write_u16(f, member);
+	}
 }
 
 
@@ -2920,7 +2920,7 @@ write_constant(FILE *f, Constant *constant)
 		write_u16(f, constant->slot);
 		break;
 	case CK_CLASS: {
-		write_class(f, constant->class.start);
+		write_class(f, &constant->class);
 		break;
 	}
 	default:
@@ -2935,7 +2935,7 @@ write_program(Program *program, FILE *f)
 	for (size_t i = 0; i < program->constant_cnt; i++) {
 		write_constant(f, &program->constants[i]);
 	}
-	write_class(f, program->global_class);
+	write_class(f, &program->global_class);
 	write_u16(f, program->entry_point);
 }
 
