@@ -329,6 +329,8 @@ ident_hash(Identifier id)
 static Identifier THIS  = { .name = (const u8*) "this", .len = 4 };
 static Identifier SET   = { .name = (const u8*)  "set", .len = 3 };
 static Identifier GET   = { .name = (const u8*)  "get", .len = 3 };
+static Identifier LESS   = { .name = (const u8*)   "<", .len = 1 };
+static Identifier PLUS   = { .name = (const u8*)   "+", .len = 1 };
 
 typedef enum {
 	AST_NULL,
@@ -2424,6 +2426,13 @@ null(CompilerState *cs)
 }
 
 void
+op_index(CompilerState *cs, OpCode op, u16 index)
+{
+	inst_write_u8(cs, op);
+	inst_write_u16(cs, index);
+}
+
+void
 drop(CompilerState *cs)
 {
 	inst_write_u8(cs, OP_DROP);
@@ -2494,9 +2503,56 @@ compile(CompilerState *cs, Ast *ast)
 	}
 	case AST_ARRAY: {
 		AstArray *array = &ast->array;
+
+		// Try low hanging fruit "simple initializers" that can't change
+		switch (array->initializer->kind) {
+		case AST_NULL:
+		case AST_BOOLEAN:
+		case AST_INTEGER:
+		case AST_VARIABLE_ACCESS:
+			compile(cs, array->size);
+			compile(cs, array->initializer);
+			inst_write_u8(cs, OP_ARRAY);
+			return;
+		default:;
+		}
+
+		u16 size_var = cs->local_cnt++;
+		u16 i_var = cs->local_cnt++;
+		u16 array_var = cs->local_cnt++;
+
+		literal(cs, (Constant) { .kind = CK_INTEGER, .integer = 0 });
+		op_index(cs, OP_SET_LOCAL, i_var);
+		drop(cs);
+
 		compile(cs, array->size);
-		compile(cs, array->initializer);
+		op_index(cs, OP_SET_LOCAL, size_var);
+		// Dummy initializer
+		null(cs);
 		inst_write_u8(cs, OP_ARRAY);
+		op_index(cs, OP_SET_LOCAL, array_var);
+
+		u16 cond_label = label(cs);
+		u16 init_label = label_reserve(cs);
+		u16 after_label = label_reserve(cs);
+		op_index(cs, OP_GET_LOCAL, i_var);
+		op_index(cs, OP_GET_LOCAL, size_var);
+		add_call_method(cs, LESS, 2);
+		op_index(cs, OP_BRANCH, init_label);
+		op_index(cs, OP_JUMP, after_label);
+		op_index(cs, OP_LABEL, init_label);
+		op_index(cs, OP_GET_LOCAL, i_var);
+		compile(cs, array->initializer);
+		add_call_method(cs, SET, 3);
+		drop(cs);
+		op_index(cs, OP_GET_LOCAL, i_var);
+		literal(cs, (Constant) { .kind = CK_INTEGER, .integer = 1 });
+		add_call_method(cs, PLUS, 2);
+		op_index(cs, OP_SET_LOCAL, i_var);
+		drop(cs);
+		op_index(cs, OP_GET_LOCAL, array_var);
+		op_index(cs, OP_JUMP, cond_label);
+		op_index(cs, OP_LABEL, after_label);
 		return;
 	}
 	case AST_OBJECT: {
