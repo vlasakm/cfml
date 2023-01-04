@@ -526,8 +526,8 @@ typedef enum {
 	AST_INTEGER,
 	AST_ARRAY,
 	AST_OBJECT,
-	AST_VARIABLE,
 	AST_FUNCTION,
+	AST_DECLARATION,
 	AST_VARIABLE_ACCESS,
 	AST_VARIABLE_ASSIGNMENT,
 	AST_INDEX_ACCESS,
@@ -574,17 +574,16 @@ typedef struct {
 
 typedef struct {
 	AST_COMMON_FIELDS
-	Identifier name;
-	Ast *value;
-} AstVariable;
-
-typedef struct {
-	AST_COMMON_FIELDS
-	Identifier name;
 	Identifier *parameters;
 	size_t parameter_cnt;
 	Ast *body;
 } AstFunction;
+
+typedef struct {
+	AST_COMMON_FIELDS
+	Identifier name;
+	Ast *value;
+} AstDeclaration;
 
 typedef struct {
 	AST_COMMON_FIELDS
@@ -678,8 +677,8 @@ union Ast {
 	AstInteger integer;
 	AstArray array;
 	AstObject object;
-	AstVariable variable;
 	AstFunction function;
+	AstDeclaration declaration;
 	AstVariableAccess variable_access;
 	AstVariableAssignment variable_assignment;
 	AstIndexAccess index_access;
@@ -902,12 +901,12 @@ block(Parser *parser)
 static Ast *
 let(Parser *parser)
 {
-	AstVariable *variable = ast_create(parser->arena, AST_VARIABLE);
+	AstDeclaration *declaration = ast_create(parser->arena, AST_DECLARATION);
 	eat(parser, TK_LET);
-	eat_identifier(parser, &variable->name);
+	eat_identifier(parser, &declaration->name);
 	eat(parser, TK_EQUAL);
-	variable->value = expression(parser);
-	return (Ast *) variable;
+	declaration->value = expression(parser);
+	return (Ast *) declaration;
 }
 
 static Ast *
@@ -937,9 +936,8 @@ object(Parser *parser)
 	eat(parser, TK_BEGIN);
 	expression_list(parser, &object->members, &object->member_cnt, TK_SEMICOLON, TK_END);
 	for (size_t i = 0; i < object->member_cnt; i++) {
-		AstKind kind = object->members[i]->kind;
-		if (kind != AST_VARIABLE && kind != AST_FUNCTION) {
-			parser_error(parser, object_tok, "Found object member that is not neither a variable nor a function");
+		if (object->members[i]->kind != AST_DECLARATION) {
+			parser_error(parser, object_tok, "Found object member that is not a declaration");
 		}
 	}
 	return (Ast *) object;
@@ -1013,13 +1011,19 @@ static Ast *
 function(Parser *parser)
 {
 	AstFunction *function = ast_create(parser->arena, AST_FUNCTION);
+	Ast *ast = (Ast *) function;
 	eat(parser, TK_FUNCTION);
-	eat_identifier(parser, &function->name);
+	if (tok_is_identifier(peek(parser))) {
+		AstDeclaration *declaration = ast_create(parser->arena, AST_DECLARATION);
+		eat_identifier(parser, &declaration->name);
+		declaration->value = (Ast *) function;
+		ast = (Ast *) declaration;
+	}
 	eat(parser, TK_LPAREN);
 	identifier_list(parser, &function->parameters, &function->parameter_cnt, TK_COMMA, TK_RPAREN);
 	eat(parser, TK_RARROW);
 	function->body = expression(parser);
-	return (Ast *) function;
+	return ast;
 }
 
 static Ast *
@@ -1892,13 +1896,9 @@ interpret(InterpreterState *is, Ast *ast)
 		for (size_t i = 0; i < ast->object.member_cnt; i++) {
 			Ast *ast_member = ast->object.members[i];
 			switch (ast_member->kind) {
-			case AST_VARIABLE:
-				object->fields[i].name = ast_member->variable.name;
-				object->fields[i].value = interpret(is, ast_member->variable.value);
-				break;
-			case AST_FUNCTION:
-				object->fields[i].name = ast_member->function.name;
-				object->fields[i].value = make_function_ast(ast_member);
+			case AST_DECLARATION:
+				object->fields[i].name = ast_member->declaration.name;
+				object->fields[i].value = interpret(is, ast_member->declaration.value);
 				break;
 			default:
 				UNREACHABLE();
@@ -1907,14 +1907,12 @@ interpret(InterpreterState *is, Ast *ast)
 		return object_value;
 	}
 	case AST_FUNCTION: {
-		Value function = make_function_ast(&ast->function);
-		env_define(is->env, ast->function.name, function);
-		return make_null();
+		return make_function_ast(&ast->function);
 	}
 
-	case AST_VARIABLE: {
-		Value value = interpret(is, ast->variable.value);
-		env_define(is->env, ast->function.name, value);
+	case AST_DECLARATION: {
+		Value value = interpret(is, ast->declaration.value);
+		env_define(is->env, ast->declaration.name, value);
 		return value;
 	}
 
@@ -2097,7 +2095,6 @@ typedef enum {
 	CK_INTEGER = 0x00,
 	CK_STRING = 0x02,
 	CK_METHOD = 0x03,
-	CK_SLOT = 0x04,
 	CK_CLASS = 0x05,
 } ConstantKind;
 
@@ -2105,6 +2102,7 @@ typedef enum {
 	OP_LITERAL = 0x01,
 	OP_ARRAY = 0x03,
 	OP_OBJECT = 0x04,
+	OP_FUNCTION = 0x11,
 	OP_GET_LOCAL = 0x0A,
 	OP_SET_LOCAL = 0x09,
 	OP_GET_GLOBAL = 0x0C,
@@ -2122,7 +2120,6 @@ typedef enum {
 } OpCode;
 
 typedef struct {
-	u16 name;
 	u16 local_cnt;
 	u8 parameter_cnt;
 	u8 *instruction_start;
@@ -2189,7 +2186,6 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 		*input += constant->string.len;
 		break;
 	case CK_METHOD:
-		constant->method.name = read_u16(input);
 		constant->method.parameter_cnt = read_u8(input);
 		constant->method.local_cnt = read_u16(input);
 		u32 instruction_cnt = read_u32(input);
@@ -2199,6 +2195,7 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 			case OP_LITERAL: *input += 2; break;
 			case OP_ARRAY: break;
 			case OP_OBJECT: *input += 2; break;
+			case OP_FUNCTION: *input += 2; break;
 			case OP_GET_LOCAL: *input += 2; break;
 			case OP_SET_LOCAL: *input += 2; break;
 			case OP_GET_GLOBAL: *input += 2; break;
@@ -2217,9 +2214,6 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 			}
 		}
 		constant->method.instruction_len = *input - constant->method.instruction_start;
-		break;
-	case CK_SLOT:
-		constant->slot = read_u16(input);
 		break;
 	case CK_CLASS: {
 		read_class(input, &constant->class);
@@ -2290,27 +2284,12 @@ vm_instantiate_class(VM *vm, Class *class, Value (*make_value)(VM *vm))
 
 	u16 *members = (u16 *) class->members;
 	for (size_t i = class->member_cnt; i--;) {
-		u8 *member_pos = (u8 *) &members[i];
-		u16 member = read_u16(&member_pos);
-		Constant *constant = &constants[member];
-		switch (constant->kind) {
-		case CK_SLOT: {
-			Constant *name = &constants[constant->slot];
-			assert(name->kind == CK_STRING);
-			object->fields[i].name = name->string;
-			object->fields[i].value = make_value(vm);
-			break;
-		}
-		case CK_METHOD: {
-			Constant *name = &constants[constant->method.name];
-			assert(name->kind == CK_STRING);
-			object->fields[i].name = name->string;
-			object->fields[i].value = make_function_bc(member);
-			break;
-		}
-		default:
-			assert(false);
-		}
+		u8 *member_name_pos = (u8 *) &members[i];
+		u16 member_name = read_u16(&member_name_pos);
+		Constant *name = &constants[member_name];
+		assert(name->kind == CK_STRING);
+		object->fields[i].name = name->string;
+		object->fields[i].value = make_value(vm);
 	}
 	object->parent = make_value(vm);
 	return object_value;
@@ -2381,6 +2360,14 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			assert(constant->kind == CK_CLASS);
 			Value object = vm_instantiate_class(vm, &constant->class, vm_pop_value);
 			vm->stack[++vm->stack_pos] = object;
+			break;
+		}
+		case OP_FUNCTION: {
+			u16 constant_index = read_u16(&ip);
+			Constant *constant = &vm->program->constants[constant_index];
+			assert(constant->kind == CK_METHOD);
+			Value function = make_function_bc(constant_index);
+			vm->stack[++vm->stack_pos] = function;
 			break;
 		}
 		case OP_GET_LOCAL: {
@@ -2511,6 +2498,7 @@ vm_run(ErrorContext *ec, Program *program)
 				case OP_LITERAL: ip += 2; break;
 				case OP_ARRAY: break;
 				case OP_OBJECT: ip += 2; break;
+				case OP_FUNCTION: ip += 2; break;
 				case OP_GET_LOCAL: ip += 2; break;
 				case OP_SET_LOCAL: ip += 2; break;
 				case OP_GET_GLOBAL: ip += 2; break;
@@ -2758,8 +2746,7 @@ compile(CompilerState *cs, Ast *ast)
 		for (size_t i = 0; i < object->member_cnt; i++) {
 			Ast *ast_member = object->members[i];
 			switch (ast_member->kind) {
-			case AST_VARIABLE:
-			case AST_FUNCTION:
+			case AST_DECLARATION:
 				compile(cs, ast_member);
 				break;
 			default: UNREACHABLE();
@@ -2809,43 +2796,34 @@ compile(CompilerState *cs, Ast *ast)
 
 		size_t instruction_len = garena_cnt_from(&cs->instructions, u8, start);
 		u8 *instruction_start = move_to_arena(cs->arena, &cs->instructions, start, u8);
-		u16 name_constant = add_string(cs, function->name);
 		u16 method = add_constant(cs, (Constant) {
 		       .kind = CK_METHOD,
 		       .method = (CMethod) {
-				.name = name_constant,
 				.local_cnt = cs->local_cnt - (function->parameter_cnt + !!saved_in_object),
 				.parameter_cnt = function->parameter_cnt + !!saved_in_object,
 				.instruction_start = instruction_start,
 				.instruction_len = instruction_len,
 			},
 		});
-		garena_push_value(&cs->members, u16, method);
 		cs->env = saved_environment;
 		cs->local_cnt = saved_local_cnt;
 		cs->in_block = saved_in_block;
 		cs->in_object = saved_in_object;
-		if (!cs->in_object) {
-			literal(cs, (Constant) { .kind = CK_NULL });
-		}
+		op_index(cs, OP_FUNCTION, method);
 		return;
 	}
 
-	case AST_VARIABLE: {
-		AstVariable *variable = &ast->variable;
-		compile(cs, variable->value);
+	case AST_DECLARATION: {
+		AstDeclaration *declaration = &ast->declaration;
+		compile(cs, declaration->value);
 		if (cs->in_object || !cs->in_block) {
-			u16 name = add_string(cs, variable->name);
-			u16 slot = add_constant(cs, (Constant) {
-			       .kind = CK_SLOT,
-			       .slot = name,
-			});
-			garena_push_value(&cs->members, u16, slot);
+			u16 name = add_string(cs, declaration->name);
+			garena_push_value(&cs->members, u16, name);
 			if (!cs->in_object) {
-				op_string(cs, OP_SET_GLOBAL, variable->name);
+				op_string(cs, OP_SET_GLOBAL, declaration->name);
 			}
 		} else {
-			env_define(cs->env, variable->name, make_integer(cs->local_cnt));
+			env_define(cs->env, declaration->name, make_integer(cs->local_cnt));
 			op_index(cs, OP_SET_LOCAL, cs->local_cnt);
 			cs->local_cnt += 1;
 		}
@@ -3018,18 +2996,11 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	compile(&cs, ast);
 	op(&cs, OP_RETURN);
 
-	Identifier program_name = {
-		.name = (void*) "program",
-		.len = 7,
-	};
-	u16 name_constant = add_string(&cs, program_name);
-
 	size_t instruction_len = garena_cnt_from(&cs.instructions, u8, start);
 	u8 *instruction_start = move_to_arena(cs.arena, &cs.instructions, start, u8);
 	u16 entry_point = add_constant(&cs, (Constant) {
 	       .kind = CK_METHOD,
 	       .method = (CMethod) {
-			.name = name_constant,
 			.local_cnt = cs.local_cnt,
 			.parameter_cnt = 0,
 			.instruction_start = instruction_start,
@@ -3106,7 +3077,6 @@ write_constant(FILE *f, Constant *constant)
 		fwrite(constant->string.name, constant->string.len, 1, f);
 		break;
 	case CK_METHOD:
-		write_u16(f, constant->method.name);
 		write_u8(f, constant->method.parameter_cnt);
 		write_u16(f, constant->method.local_cnt);
 		size_t instruction_cnt = 0;
@@ -3116,6 +3086,7 @@ write_constant(FILE *f, Constant *constant)
 			case OP_LITERAL: i += 2; break;
 			case OP_ARRAY: break;
 			case OP_OBJECT: i += 2; break;
+			case OP_FUNCTION: i += 2; break;
 			case OP_GET_LOCAL: i += 2; break;
 			case OP_SET_LOCAL: i += 2; break;
 			case OP_GET_GLOBAL: i += 2; break;
@@ -3135,9 +3106,6 @@ write_constant(FILE *f, Constant *constant)
 		}
 		write_u32(f, instruction_cnt);
 		fwrite(constant->method.instruction_start, constant->method.instruction_len, 1, f);
-		break;
-	case CK_SLOT:
-		write_u16(f, constant->slot);
 		break;
 	case CK_CLASS: {
 		write_class(f, &constant->class);
