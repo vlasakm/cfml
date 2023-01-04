@@ -2094,7 +2094,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 	CMethod *method = &method_constant->method;
 	assert(argument_cnt == method->parameter_cnt);
 
-	size_t local_cnt = method->local_cnt;
+	size_t local_cnt = argument_cnt + method->local_cnt;
 	size_t saved_bp = vm->bp;
 	vm->bp = vm->frame_stack_pos;
 	vm->frame_stack_pos += local_cnt;
@@ -2597,7 +2597,7 @@ compile(CompilerState *cs, Ast *ast)
 		       .kind = CK_METHOD,
 		       .method = (CMethod) {
 				.name = name_constant,
-				.local_cnt = cs->local_cnt,
+				.local_cnt = cs->local_cnt - (function->parameter_cnt + !!saved_in_object),
 				.parameter_cnt = function->parameter_cnt + !!saved_in_object,
 				.instruction_start = cs->instructions,
 				.instruction_len = cs->instruction_cnt,
