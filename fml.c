@@ -2356,14 +2356,14 @@ grow(void **array, size_t *cnt, size_t *capacity, size_t new_elems, size_t elem_
 static void
 inst_write_u8(CompilerState *cs, u8 b)
 {
-	grow(&cs->instructions, &cs->instruction_cnt, &cs->instruction_capacity, 1, sizeof(*cs->instructions));
+	grow((void*)&cs->instructions, &cs->instruction_cnt, &cs->instruction_capacity, 1, sizeof(*cs->instructions));
 	cs->instructions[cs->instruction_cnt++] = b;
 }
 
 static void
 inst_write_u16(CompilerState *cs, u16 b)
 {
-	grow(&cs->instructions, &cs->instruction_cnt, &cs->instruction_capacity, 2, sizeof(*cs->instructions));
+	grow((void*)&cs->instructions, &cs->instruction_cnt, &cs->instruction_capacity, 2, sizeof(*cs->instructions));
 	cs->instructions[cs->instruction_cnt + 0] = b >> 0;
 	cs->instructions[cs->instruction_cnt + 1] = b >> 8;
 	cs->instruction_cnt += 2;
@@ -2372,7 +2372,7 @@ inst_write_u16(CompilerState *cs, u16 b)
 static u16
 add_constant(CompilerState *cs, Constant constant)
 {
-	grow(&cs->constants, &cs->constant_cnt, &cs->constant_capacity, 1, sizeof(*cs->constants));
+	grow((void*)&cs->constants, &cs->constant_cnt, &cs->constant_capacity, 1, sizeof(*cs->constants));
 	size_t index = cs->constant_cnt++;
 	assert(index <= 0xFFFF);
 	cs->constants[index] = constant;
@@ -2624,7 +2624,7 @@ compile(CompilerState *cs, Ast *ast)
 			       .kind = CK_SLOT,
 			       .slot = name,
 			});
-			grow(&cs->members, &cs->member_cnt, &cs->member_capacity, 1, sizeof(*cs->members));
+			grow((void*)&cs->members, &cs->member_cnt, &cs->member_capacity, 1, sizeof(*cs->members));
 			cs->members[cs->member_cnt++] = slot;
 			if (!cs->in_object) {
 				op_string(cs, OP_SET_GLOBAL, variable->name);
