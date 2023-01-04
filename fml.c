@@ -2952,10 +2952,16 @@ main(int argc, char **argv) {
 	fread(buf, fsize, 1, f);
 	fclose(f);
 
-	if (strcmp(argv[1], "run") == 0) {
+	if (strcmp(argv[1], "run_ast") == 0) {
 		Ast *ast = parse(buf, fsize);
 		assert(ast);
 		interpret_ast(ast);
+	} else if (strcmp(argv[1], "run") == 0) {
+		Ast *ast = parse(buf, fsize);
+		assert(ast);
+		Program program;
+		compile_ast(&program, ast);
+		vm_run(&program);
 	} else if (strcmp(argv[1], "execute") == 0) {
 		Program program;
 		read_program(&program, buf, fsize);
