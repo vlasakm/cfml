@@ -329,8 +329,8 @@ ident_hash(Identifier id)
 static Identifier THIS  = { .name = (const u8*) "this", .len = 4 };
 static Identifier SET   = { .name = (const u8*)  "set", .len = 3 };
 static Identifier GET   = { .name = (const u8*)  "get", .len = 3 };
-static Identifier LESS   = { .name = (const u8*)   "<", .len = 1 };
-static Identifier PLUS   = { .name = (const u8*)   "+", .len = 1 };
+static Identifier LESS  = { .name = (const u8*)   "<",  .len = 1 };
+static Identifier PLUS  = { .name = (const u8*)   "+",  .len = 1 };
 
 typedef enum {
 	AST_NULL,
@@ -363,7 +363,7 @@ typedef union Ast Ast;
 
 typedef struct {
 	AST_COMMON_FIELDS
-	_Bool value;
+	bool value;
 } AstBoolean;
 
 typedef struct {
