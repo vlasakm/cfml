@@ -1981,8 +1981,9 @@ read_constant(u8 **input, Constant *constant)
 			case OP_CALL_FUNCTION: *input += 3; break;
 			case OP_CALL_METHOD: *input += 3; break;
 			case OP_PRINT: *input += 3; break;
-			case OP_DROP:  break;
+			case OP_DROP: break;
 			case OP_RETURN: break;
+			default: assert(false);
 			}
 		}
 		constant->method.instruction_len = *input - constant->method.instruction_start;
@@ -2301,8 +2302,9 @@ vm_run(Program *program)
 				case OP_CALL_FUNCTION: ip += 3; break;
 				case OP_CALL_METHOD: ip += 3; break;
 				case OP_PRINT: ip += 3; break;
-				case OP_DROP:  break;
+				case OP_DROP: break;
 				case OP_RETURN: break;
+				default: assert(false);
 				}
 			}
 
@@ -2910,8 +2912,9 @@ write_constant(FILE *f, Constant *constant)
 			case OP_CALL_FUNCTION: i += 3; break;
 			case OP_CALL_METHOD: i += 3; break;
 			case OP_PRINT: i += 3; break;
-			case OP_DROP:  break;
+			case OP_DROP: break;
 			case OP_RETURN: break;
+			default: assert(false);
 			}
 		}
 		write_u32(f, instruction_cnt);
