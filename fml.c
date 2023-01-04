@@ -2781,6 +2781,7 @@ compile(CompilerState *cs, Ast *ast)
 			op(cs, OP_DROP);
 			compile(cs, top->expressions[i]);
 		}
+		op(cs, OP_RETURN);
 		return;
 	}
 	}
