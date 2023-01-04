@@ -519,6 +519,7 @@ static Identifier SET   = { .name = (const u8*)  "set", .len = 3 };
 static Identifier GET   = { .name = (const u8*)  "get", .len = 3 };
 static Identifier LESS  = { .name = (const u8*)   "<",  .len = 1 };
 static Identifier PLUS  = { .name = (const u8*)   "+",  .len = 1 };
+static Identifier EMPTY = { .name = (const u8*)    "",  .len = 0 };
 
 typedef enum {
 	AST_NULL,
@@ -624,7 +625,7 @@ typedef struct {
 
 typedef struct {
 	AST_COMMON_FIELDS
-	Identifier name;
+	Ast *function;
 	Ast **arguments;
 	size_t argument_cnt;
 } AstFunctionCall;
@@ -1058,14 +1059,6 @@ call(Parser *parser, Ast *left, int rbp)
 	// copy the old structs to avoid problems with aliasing union fields
 	eat(parser, TK_LPAREN);
 	switch (left->kind) {
-	case AST_VARIABLE_ACCESS: {
-		left->kind = AST_FUNCTION_CALL;
-		AstVariableAccess variable_access = left->variable_access;
-		AstFunctionCall *function_call = &left->function_call;
-		function_call->name = variable_access.name;
-		expression_list(parser, &function_call->arguments, &function_call->argument_cnt, TK_COMMA, TK_RPAREN);
-		return left;
-	}
 	case AST_FIELD_ACCESS: {
 		left->kind = AST_METHOD_CALL;
 		AstFieldAccess field_access = left->field_access;
@@ -1075,9 +1068,12 @@ call(Parser *parser, Ast *left, int rbp)
 		expression_list(parser, &method_call->arguments, &method_call->argument_cnt, TK_COMMA, TK_RPAREN);
 		return left;
 	}
-	default:
-		parser_error(parser, parser->prev, "Invalid call target, expected variable or field access");
-		return left;
+	default: {
+		AstFunctionCall *function_call = ast_create(parser->arena, AST_FUNCTION_CALL);
+		function_call->function = left;
+		expression_list(parser, &function_call->arguments, &function_call->argument_cnt, TK_COMMA, TK_RPAREN);
+		return (Ast *) function_call;
+	}
 	}
 }
 
@@ -1582,8 +1578,7 @@ value_field_try(Value value, Value *receiver, Identifier name)
 	}
 	Object *object = value_as_object(value);
 	for (size_t i = 0; i < object->field_cnt; i++) {
-		Identifier field_name = object->fields[i].name;
-		if (ident_eq(field_name, name)) {
+		if (ident_eq(object->fields[i].name, name)) {
 			// We found the field, set the receiver Object to the
 			// field's owner
 			receiver->gcvalue = &object->gcvalue;
@@ -1597,22 +1592,11 @@ Value *
 value_field(ErrorContext *ec, Value value, Value *receiver, Identifier name)
 {
 	Value *field = value_field_try(value, receiver, name);
-	if (!field || value_is_function(*field)) {
+	if (!field) {
 		exec_error(ec, "failed to find field %.*s in object", (int)name.len, name.name);
 	}
 	return field;
 }
-
-Value *
-value_method_try(Value value, Value *receiver, Identifier name)
-{
-	Value *field = value_field_try(value, receiver, name);
-	if (!field || !value_is_function(*field)) {
-		return NULL;
-	}
-	return field;
-}
-
 
 Value
 value_call_primitive_method(ErrorContext *ec, Value target, Identifier method, Value *arguments, size_t argument_cnt)
@@ -1844,22 +1828,9 @@ env_lookup(InterpreterState *is, Identifier name)
 		// TODO: could be improved by having env_define return an lvalue
 		env_define(is->global_env, name, null);
 		return env_lookup_raw(is->global_env, name);
-	} else if (value_is_function(*lvalue)) {
-		return NULL;
 	}
 	return lvalue;
 }
-
-AstFunction *
-env_lookup_func(Environment *env, Identifier name)
-{
-	Value *lvalue = env_lookup_raw(env, name);
-	if (lvalue && value_is_function(*lvalue)) {
-		return value_as_function_ast(*lvalue);
-	}
-	return NULL;
-}
-
 
 static Value interpreter_call_method(InterpreterState *is, Value object, bool function_call, Identifier method, Ast **ast_arguments, size_t argument_cnt);
 
@@ -1949,8 +1920,8 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 
 	case AST_FUNCTION_CALL: {
-		Value dummy = make_null();
-		return interpreter_call_method(is, dummy, true, ast->function_call.name, ast->function_call.arguments, ast->function_call.argument_cnt);
+		Value function = interpret(is, ast->function_call.function);
+		return interpreter_call_method(is, function, true, EMPTY, ast->function_call.arguments, ast->function_call.argument_cnt);
 	}
 	case AST_METHOD_CALL: {
 		Value object = interpret(is, ast->method_call.object);
@@ -2016,10 +1987,12 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 
 	AstFunction *function = NULL;
 	if (function_call) {
-		// TODO: lookup functions in global_env if this is problematic
-		function = env_lookup_func(is->env, method);
+		if (!value_is_function(object)) {
+			exec_error(is->ec, "Function call target is not a function");
+		}
+		function = value_as_function_ast(object);
 	} else {
-		Value *function_value = value_method_try(object, &object, method);
+		Value *function_value = value_field_try(object, &object, method);
 		function = function_value ? value_as_function_ast(*function_value) : NULL;
 	}
 	if (function) {
@@ -2205,7 +2178,7 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 			case OP_LABEL: *input += 2; break;
 			case OP_JUMP: *input += 2; break;
 			case OP_BRANCH: *input += 2; break;
-			case OP_CALL_FUNCTION: *input += 3; break;
+			case OP_CALL_FUNCTION: *input += 1; break;
 			case OP_CALL_METHOD: *input += 3; break;
 			case OP_PRINT: *input += 3; break;
 			case OP_DROP: break;
@@ -2432,22 +2405,22 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_CALL_FUNCTION: {
-			Identifier name = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
-			Value object = vm->global;
-			Value *method_value = value_method_try(object, &object, name);
-			if (!method_value) {
-				exec_error(vm->ec, "failed to find function '%.*s'", (int) name.len, name.name);
+			Value *function = &vm->stack[vm->stack_pos - argument_cnt];
+			if (!value_is_function(*function)) {
+				exec_error(vm->ec, "Function call target is not a function");
 			}
-			u16 method_index = value_as_function_bc(*method_value);
-			vm_call_method(vm, method_index, argument_cnt);
+			u16 method_index = value_as_function_bc(*function);
+			// Receiver (this) is null for functions
+			*function = make_null();
+			vm_call_method(vm, method_index, argument_cnt + 1);
 			break;
 		}
 		case OP_CALL_METHOD: {
 			Identifier name = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
 			Value *lobject = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
-			Value *method_value = value_method_try(*lobject, lobject, name);
+			Value *method_value = value_field_try(*lobject, lobject, name);
 			if (method_value) {
 				u16 method_index = value_as_function_bc(*method_value);
 				vm_call_method(vm, method_index, argument_cnt);
@@ -2518,7 +2491,7 @@ vm_run(ErrorContext *ec, Program *program)
 				}
 				case OP_JUMP: ip += 2; break;
 				case OP_BRANCH: ip += 2; break;
-				case OP_CALL_FUNCTION: ip += 3; break;
+				case OP_CALL_FUNCTION: ip += 1; break;
 				case OP_CALL_METHOD: ip += 3; break;
 				case OP_PRINT: ip += 3; break;
 				case OP_DROP: break;
@@ -2782,10 +2755,8 @@ compile(CompilerState *cs, Ast *ast)
 		cs->in_object = false;
 
 		cs->env = env_create(cs->env);
-		if (saved_in_object) {
-			env_define(cs->env, THIS, make_integer(cs->local_cnt));
-			cs->local_cnt += 1;
-		}
+		env_define(cs->env, THIS, make_integer(cs->local_cnt));
+		cs->local_cnt += 1;
 		for (size_t i = 0; i < function->parameter_cnt; i++) {
 			env_define(cs->env, function->parameters[i], make_integer(cs->local_cnt));
 			cs->local_cnt += 1;
@@ -2799,8 +2770,8 @@ compile(CompilerState *cs, Ast *ast)
 		u16 method = add_constant(cs, (Constant) {
 		       .kind = CK_METHOD,
 		       .method = (CMethod) {
-				.local_cnt = cs->local_cnt - (function->parameter_cnt + !!saved_in_object),
-				.parameter_cnt = function->parameter_cnt + !!saved_in_object,
+				.local_cnt = cs->local_cnt - (function->parameter_cnt + 1),
+				.parameter_cnt = function->parameter_cnt + 1,
 				.instruction_start = instruction_start,
 				.instruction_len = instruction_len,
 			},
@@ -2884,10 +2855,12 @@ compile(CompilerState *cs, Ast *ast)
 
 	case AST_FUNCTION_CALL: {
 		AstFunctionCall *function_call = &ast->function_call;
+		compile(cs, function_call->function);
 		for (size_t i = 0; i < function_call->argument_cnt; i++) {
 			compile(cs, function_call->arguments[i]);
 		}
-		op_string_cnt(cs, OP_CALL_FUNCTION, function_call->name, function_call->argument_cnt);
+		op(cs, OP_CALL_FUNCTION);
+		inst_write_u8(cs, function_call->argument_cnt);
 		return;
 	}
 	case AST_METHOD_CALL: {
@@ -3096,7 +3069,7 @@ write_constant(FILE *f, Constant *constant)
 			case OP_LABEL: i += 2; break;
 			case OP_JUMP: i += 2; break;
 			case OP_BRANCH: i += 2; break;
-			case OP_CALL_FUNCTION: i += 3; break;
+			case OP_CALL_FUNCTION: i += 1; break;
 			case OP_CALL_METHOD: i += 3; break;
 			case OP_PRINT: i += 3; break;
 			case OP_DROP: break;
