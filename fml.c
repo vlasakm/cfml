@@ -70,35 +70,35 @@ typedef enum {
 	_(SLASH,         NULL,     binop,    11, 12) \
 	_(PERCENT,       NULL,     binop,    11, 12) \
 	                                             \
-	_(SEMICOLON,     NULL,     NULL,      0,  0) \
+	_(SEMICOLON,     NULL,     stop,     -1,  0) \
 	_(LPAREN,        paren,    call,     13, 14) \
-	_(RPAREN,        NULL,     NULL,      0,  0) \
+	_(RPAREN,        NULL,     stop,     -1,  0) \
 	_(EQUAL,         NULL,     NULL,      0,  0) \
 	_(LARROW,        NULL,     assign,    2,  1) \
 	_(RARROW,        NULL,     NULL,      0,  0) \
 	_(DOT,           NULL,     field,    13, 14) \
 	_(LBRACKET,      NULL,     indexing, 13, 14) \
-	_(RBRACKET,      NULL,     NULL,      0,  0) \
-	_(COMMA,         NULL,     NULL,      0,  0) \
+	_(RBRACKET,      NULL,     stop,     -1,  0) \
+	_(COMMA,         NULL,     stop,     -1,  0) \
 	                                             \
-	_(BEGIN,         block,    NULL,      0,  0) \
-	_(END,           NULL,     NULL,      0,  0) \
+	_(BEGIN,         block,    stop,     -1,  0) \
+	_(END,           NULL,     stop,     -1,  0) \
 	_(IF,            cond,     NULL,      0,  0) \
-	_(THEN,          NULL,     NULL,      0,  0) \
-	_(ELSE,          NULL,     NULL,      0,  0) \
+	_(THEN,          NULL,     stop,     -1,  0) \
+	_(ELSE,          NULL,     stop,     -1,  0) \
 	_(LET,           let,      NULL,      0,  0) \
 	_(NULL,          primary,  NULL,      0,  0) \
 	_(PRINT,         print,    NULL,      0,  0) \
 	_(OBJECT,        object,   NULL,      0,  0) \
 	_(EXTENDS,       NULL,     NULL,      0,  0) \
 	_(WHILE,         loop,     NULL,      0,  0) \
-	_(DO,            NULL,     NULL,      0,  0) \
+	_(DO,            NULL,     stop,     -1,  0) \
 	_(FUNCTION,      function, NULL,      0,  0) \
 	_(ARRAY,         array,    NULL,      0,  0) \
 	_(TRUE,          primary,  NULL,      0,  0) \
 	_(FALSE,         primary,  NULL,      0,  0) \
 	                                             \
-	_(EOF,           NULL,     NULL,      0,  0) \
+	_(EOF,           NULL,     stop,     -1,  0) \
 	_(ERROR,         NULL,     NULL,      0,  0)
 
 
@@ -825,6 +825,15 @@ function(Parser *parser)
 }
 
 static Ast *
+stop(Parser *parser, Ast *left, int rbp)
+{
+	(void) parser;
+	(void) left;
+	(void) rbp;
+	UNREACHABLE();
+}
+
+static Ast *
 binop(Parser *parser, Ast *left, int rbp)
 {
 	AST_CREATE(AstMethodCall, method_call, AST_METHOD_CALL);
@@ -972,7 +981,11 @@ expression_bp(Parser *parser, int bp)
 	for (;;) {
 		token = peek(parser);
 		LeftInfo li = left_info[token];
-		if (!li.led || li.lbp < bp) {
+		if (!li.led) {
+			fprintf(stderr, "invalid token at border of expression: %s\n", tok_repr[token]);
+			return NULL;
+		}
+		if (li.lbp < bp) {
 			break;
 		}
 		TRY(left = li.led(parser, left, li.rbp));
