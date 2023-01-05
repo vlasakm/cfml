@@ -2291,9 +2291,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		locals[i] = make_null();
 	}
 
-	u8 *ip = method->instruction_start;
-	u8 *end = method->instruction_start + method->instruction_len;
-	while (ip != end) {
+	for (u8 *ip = method->instruction_start;;) {
 		switch (read_u8(&ip)) {
 		case OP_LITERAL: {
 			u16 constant_index = read_u16(&ip);
@@ -2446,13 +2444,12 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_RETURN: {
-			goto end;
+			vm->frame_stack_pos = vm->bp;
+			vm->bp = saved_bp;
+			return;
 		}
 		}
 	}
-end:
-	vm->frame_stack_pos = vm->bp;
-	vm->bp = saved_bp;
 }
 
 static void
