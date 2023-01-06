@@ -142,70 +142,87 @@ typedef enum {
 	LS_EXCLAM,
 } LexState;
 
-#define TOKENS(_) \
-	_(NUMBER,        primary,  NULL,      0,  0) \
-	_(IDENTIFIER,    ident,    NULL,      0,  0) \
-	_(STRING,        NULL,     NULL,      0,  0) \
-                                                     \
-	_(BAR,           NULL,     binop,     3,  4) \
-	_(AMPERSANT,     NULL,     binop,     5,  6) \
-	_(EQUAL_EQUAL,   NULL,     binop,     7,  8) \
-	_(BANG_EQUAL,    NULL,     binop,     7,  8) \
-	_(GREATER,       NULL,     binop,     7,  8) \
-	_(LESS,          NULL,     binop,     7,  8) \
-	_(GREATER_EQUAL, NULL,     binop,     7,  8) \
-	_(LESS_EQUAL,    NULL,     binop,     7,  8) \
-	_(PLUS,          NULL,     binop,     9, 10) \
-	_(MINUS,         NULL,     binop,     9, 10) \
-	_(ASTERISK,      NULL,     binop,    11, 12) \
-	_(SLASH,         NULL,     binop,    11, 12) \
-	_(PERCENT,       NULL,     binop,    11, 12) \
-	                                             \
-	_(SEMICOLON,     NULL,     stop,     -1,  0) \
-	_(LPAREN,        paren,    call,     13, 14) \
-	_(RPAREN,        NULL,     stop,     -1,  0) \
-	_(EQUAL,         NULL,     NULL,      0,  0) \
-	_(LARROW,        NULL,     assign,    2,  1) \
-	_(RARROW,        NULL,     NULL,      0,  0) \
-	_(DOT,           NULL,     field,    13, 14) \
-	_(LBRACKET,      NULL,     indexing, 13, 14) \
-	_(RBRACKET,      NULL,     stop,     -1,  0) \
-	_(COMMA,         NULL,     stop,     -1,  0) \
-	                                             \
-	_(BEGIN,         block,    stop,     -1,  0) \
-	_(END,           NULL,     stop,     -1,  0) \
-	_(IF,            cond,     NULL,      0,  0) \
-	_(THEN,          NULL,     stop,     -1,  0) \
-	_(ELSE,          NULL,     stop,     -1,  0) \
-	_(LET,           let,      NULL,      0,  0) \
-	_(NULL,          primary,  NULL,      0,  0) \
-	_(PRINT,         print,    NULL,      0,  0) \
-	_(OBJECT,        object,   NULL,      0,  0) \
-	_(EXTENDS,       NULL,     NULL,      0,  0) \
-	_(WHILE,         loop,     NULL,      0,  0) \
-	_(DO,            NULL,     stop,     -1,  0) \
-	_(FUNCTION,      function, NULL,      0,  0) \
-	_(ARRAY,         array,    NULL,      0,  0) \
-	_(TRUE,          primary,  NULL,      0,  0) \
-	_(FALSE,         primary,  NULL,      0,  0) \
-	                                             \
-	_(EOF,           NULL,     stop,     -1,  0) \
-	_(ERROR,         NULL,     NULL,      0,  0)
+#define TOKENS(KW, PU, OT) \
+	OT(NUMBER,        "a number",      primary,  NULL,      0,  0) \
+	OT(IDENTIFIER,    "an identifier", ident,    NULL,      0,  0) \
+	OT(STRING,        "a string",      NULL,     NULL,      0,  0) \
+                                                                       \
+	PU(BAR,           "|",             NULL,     binop,     3,  4) \
+	PU(AMPERSANT,     "&",             NULL,     binop,     5,  6) \
+	PU(EQUAL_EQUAL,   "==",            NULL,     binop,     7,  8) \
+	PU(BANG_EQUAL,    "!=",            NULL,     binop,     7,  8) \
+	PU(GREATER,       ">",             NULL,     binop,     7,  8) \
+	PU(LESS,          "<",             NULL,     binop,     7,  8) \
+	PU(GREATER_EQUAL, ">=",            NULL,     binop,     7,  8) \
+	PU(LESS_EQUAL,    "<=",            NULL,     binop,     7,  8) \
+	PU(PLUS,          "+",             NULL,     binop,     9, 10) \
+	PU(MINUS,         "-",             NULL,     binop,     9, 10) \
+	PU(ASTERISK,      "*",             NULL,     binop,    11, 12) \
+	PU(SLASH,         "/",             NULL,     binop,    11, 12) \
+	PU(PERCENT,       "%",             NULL,     binop,    11, 12) \
+	                                                               \
+	PU(SEMICOLON,     ";",             NULL,     stop,     -1,  0) \
+	PU(LPAREN,        "(",             paren,    call,     13, 14) \
+	PU(RPAREN,        ")",             NULL,     stop,     -1,  0) \
+	PU(EQUAL,         "=",             NULL,     NULL,      0,  0) \
+	PU(LARROW,        "<-",            NULL,     assign,    2,  1) \
+	PU(RARROW,        "->",            NULL,     NULL,      0,  0) \
+	PU(DOT,           ".",             NULL,     field,    13, 14) \
+	PU(LBRACKET,      "[",             NULL,     indexing, 13, 14) \
+	PU(RBRACKET,      "]",             NULL,     stop,     -1,  0) \
+	PU(COMMA,         ",",             NULL,     stop,     -1,  0) \
+	                                                               \
+	KW(BEGIN,         "begin",         block,    stop,     -1,  0) \
+	KW(END,           "end",           NULL,     stop,     -1,  0) \
+	KW(IF,            "if",            cond,     NULL,      0,  0) \
+	KW(THEN,          "then",          NULL,     stop,     -1,  0) \
+	KW(ELSE,          "else",          NULL,     stop,     -1,  0) \
+	KW(LET,           "let",           let,      NULL,      0,  0) \
+	KW(NULL,          "null",          primary,  NULL,      0,  0) \
+	KW(PRINT,         "print",         print,    NULL,      0,  0) \
+	KW(OBJECT,        "object",        object,   NULL,      0,  0) \
+	KW(EXTENDS,       "extends",       NULL,     NULL,      0,  0) \
+	KW(WHILE,         "while",         loop,     NULL,      0,  0) \
+	KW(DO,            "do",            NULL,     stop,     -1,  0) \
+	KW(FUNCTION,      "function",      function, NULL,      0,  0) \
+	KW(ARRAY,         "array",         array,    NULL,      0,  0) \
+	KW(TRUE,          "true",          primary,  NULL,      0,  0) \
+	KW(FALSE,         "false",         primary,  NULL,      0,  0) \
+	                                                               \
+	OT(EOF,           "end of input",  NULL,     stop,     -1,  0) \
+	OT(ERROR,         "lex error",     NULL,     NULL,      0,  0)
 
 
 typedef enum {
 	#define TOK_ENUM(tok, ...) TK_##tok,
-	TOKENS(TOK_ENUM)
+	TOKENS(TOK_ENUM, TOK_ENUM, TOK_ENUM)
 	#undef TOK_ENUM
-	TK_OP_MIN = TK_BAR,
-	TK_OP_MAX = TK_PERCENT,
 } TokenKind;
 
 static const char *tok_repr[] = {
-	#define TOK_STR(tok, ...) #tok,
-	TOKENS(TOK_STR)
+	#define TOK_STR(tok, str, ...) "'"str"'",
+	#define TOK_STR_OTHER(tok, str, ...) str,
+	TOKENS(TOK_STR, TOK_STR, TOK_STR_OTHER)
 	#undef TOK_STR
+	#undef TOK_STR_OTHER
 };
+
+static struct {
+	const char *str;
+	TokenKind tok;
+} keywords[] = {
+	#define TOK_KW(tok, str, ...) { str, TK_##tok },
+	#define TOK_OTHER(tok, str, ...)
+	TOKENS(TOK_KW, TOK_OTHER, TOK_OTHER)
+	#undef TOK_KW
+#undef TOK_OTHER
+};
+
+static bool
+tok_is_identifier(TokenKind kind)
+{
+	return kind == TK_IDENTIFIER || (kind >= TK_BAR && kind <= TK_PERCENT);
+}
 
 typedef struct {
 	TokenKind kind;
@@ -354,27 +371,6 @@ err:
 	length = lexer->pos - start + end_offset;
 	size_t line = lexer->line_num + 1;
 	size_t col = start - lexer->line_start + 1;
-	static struct {
-		const char *str;
-		TokenKind tok;
-	} keywords[] = {
-		{ "begin", TK_BEGIN },
-		{ "end", TK_END },
-		{ "if", TK_IF },
-		{ "then", TK_THEN },
-		{ "else", TK_ELSE },
-		{ "let", TK_LET },
-		{ "null", TK_NULL },
-		{ "print", TK_PRINT },
-		{ "object", TK_OBJECT },
-		{ "extends", TK_EXTENDS },
-		{ "while", TK_WHILE },
-		{ "do", TK_DO },
-		{ "function", TK_FUNCTION },
-		{ "array", TK_ARRAY },
-		{ "true", TK_TRUE },
-		{ "false", TK_FALSE },
-	};
 	if (tok == TK_IDENTIFIER) {
 		for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
 			if (strlen(keywords[i].str) == length && memcmp((const char*) start, keywords[i].str, length) == 0) {
@@ -383,7 +379,6 @@ err:
 			}
 		}
 	}
-	fprintf(stderr, "TOK[%2zu:%2zu]: %s %.*s\n", line, col, tok_repr[tok], (int) length, start);
 	token->kind = tok;
 	token->pos = start;
 	token->end = lexer->pos + end_offset;
@@ -641,7 +636,7 @@ static bool
 eat_identifier(Parser *parser, Identifier *identifier)
 {
 	Token tok = discard(parser);
-	if (tok.kind != TK_IDENTIFIER && (tok.kind < TK_OP_MIN || tok.kind > TK_OP_MAX)) {
+	if (!tok_is_identifier(tok.kind)) {
 		fprintf(stderr, "expected an identifier, found %s\n", tok_repr[tok.kind]);
 		return false;
 	}
@@ -1049,8 +1044,8 @@ typedef struct {
 } NullInfo;
 
 NullInfo null_info[] = {
-	#define TOK_NULL(tok, nud, led, lbp, rbp) { nud },
-	TOKENS(TOK_NULL)
+	#define TOK_NULL(tok, str, nud, led, lbp, rbp) { nud },
+	TOKENS(TOK_NULL, TOK_NULL, TOK_NULL)
 	#undef TOK_STR
 };
 
@@ -1061,8 +1056,8 @@ typedef struct {
 } LeftInfo;
 
 LeftInfo left_info[] = {
-	#define TOK_LEFT(tok, nud, led, lbp, rbp) { led, lbp, rbp },
-	TOKENS(TOK_LEFT)
+	#define TOK_LEFT(tok, str, nud, led, lbp, rbp) { led, lbp, rbp },
+	TOKENS(TOK_LEFT, TOK_LEFT, TOK_LEFT)
 	#undef TOK_STR
 };
 
