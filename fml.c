@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdalign.h>
 #include <string.h>
 #include <assert.h>
 #include <inttypes.h>
@@ -24,7 +25,97 @@ _Noreturn void
 unreachable(char *file, size_t line)
 {
 	fprintf(stderr, "ERROR: unreachable code reached at %s:%zu\n", file, line);
-	exit(1);
+	exit(EXIT_FAILURE);
+}
+
+typedef struct ArenaChunk ArenaChunk;
+
+struct ArenaChunk {
+	size_t size;
+	size_t pos;
+	ArenaChunk *prev;
+	alignas(u64) u8 mem[];
+};
+
+typedef struct {
+	ArenaChunk *current;
+	size_t prev_size_sum;
+} Arena;
+
+void
+arena_init(Arena *arena)
+{
+	size_t size = 1024;
+	ArenaChunk *chunk = malloc(sizeof(ArenaChunk) + size);
+	chunk->prev = NULL;
+	chunk->size = size;
+	chunk->pos = 0;
+	arena->current = chunk;
+	arena->prev_size_sum = 0;
+}
+
+void
+arena_destroy(Arena *arena)
+{
+	ArenaChunk *chunk = arena->current;
+	while (chunk) {
+		ArenaChunk *prev = chunk->prev;
+		free(chunk);
+		chunk = prev;
+	}
+}
+
+void *
+arena_alloc(Arena *arena, size_t size)
+{
+	if (arena->current->pos + size > arena->current->size) {
+		arena->prev_size_sum += arena->current->size;
+		size_t new_size = size + arena->current->size * 2;
+		ArenaChunk *new = malloc(sizeof(ArenaChunk) + new_size);
+		new->size = new_size;
+		new->pos = 0;
+		new->prev = arena->current;
+		arena->current = new;
+	}
+	size_t pos = (arena->current->pos + 7) & ~7;
+	arena->current->pos = pos + size;
+	return &arena->current->mem[pos];
+}
+
+void *
+arena_realloc(Arena *arena, void *old, size_t old_size, size_t new_size)
+{
+	size_t diff = new_size - old_size;
+	if (old && &arena->current->mem[arena->current->pos] == (u8 *) old + old_size && arena->current->pos + diff <= arena->current->size) {
+		arena->current->pos += diff;
+		return old;
+	}
+	void *new = arena_alloc(arena, new_size);
+	if (old) {
+		memcpy(new, old, old_size);
+	}
+	return new;
+
+}
+
+size_t
+arena_save(Arena *arena)
+{
+	return arena->prev_size_sum + arena->current->pos;
+}
+
+void
+arena_restore(Arena *arena, size_t pos)
+{
+	ArenaChunk *chunk = arena->current;
+	while (chunk && pos < arena->prev_size_sum) {
+		ArenaChunk *prev = chunk->prev;
+		free(chunk);
+		chunk = prev;
+		arena->prev_size_sum -= chunk->size;
+	}
+	chunk->pos = pos - arena->prev_size_sum;
+	arena->current = chunk;
 }
 
 typedef struct {
@@ -510,12 +601,14 @@ union Ast {
 typedef struct {
 	Lexer lexer;
 	Token lookahead;
+	Arena *arena;
 } Parser;
 
 void
-parser_init(Parser *parser, const u8 *buf, size_t buf_len)
+parser_init(Parser *parser, Arena *arena, const u8 *buf, size_t buf_len)
 {
 	parser->lexer = lex_init(buf, buf_len);
+	parser->arena = arena;
 	lex_next(&parser->lexer, &parser->lookahead);
 }
 
@@ -580,22 +673,19 @@ try_eat(Parser *parser, TokenKind kind)
 	return false;
 }
 
-static Ast *
-ast_create(AstKind kind, size_t size)
+static void *
+ast_create(Arena *arena, AstKind kind)
 {
-	(void) size;
-	Ast *ast = calloc(1, sizeof(Ast));
+	Ast *ast = arena_alloc(arena, sizeof(Ast));
+	memset(ast, 0, sizeof(*ast));
 	ast->kind = kind;
 	return ast;
 }
 
-#define AST_CREATE(type, ident, kind) type *ident = (type *) ast_create(kind, sizeof(type))
-
 static Ast *
 create_null(Parser *parser)
 {
-	AST_CREATE(Ast, ast, AST_NULL);
-	(void) parser;
+	Ast *ast = ast_create(parser->arena, AST_NULL);
 	return ast;
 }
 
@@ -618,8 +708,9 @@ expression_list(Parser *parser, Ast ***list, size_t *n, TokenKind separator, Tok
 
 	while (!try_eat(parser, terminator)) {
 		if (capacity == 0 || *n == capacity) {
+			size_t old_capacity = capacity;
 			capacity = capacity ? capacity * 2 : 4;
-			*list = realloc(*list, capacity * sizeof((*list)[0]));
+			*list = arena_realloc(parser->arena, *list, old_capacity * sizeof((*list)[0]), capacity * sizeof((*list)[0]));
 		}
 
 		Ast *expr;
@@ -645,8 +736,9 @@ identifier_list(Parser *parser, Identifier **list, size_t *n, TokenKind separato
 
 	while (!try_eat(parser, terminator)) {
 		if (capacity == 0 || *n == capacity) {
+			size_t old_capacity = capacity;
 			capacity = capacity ? capacity * 2 : 4;
-			*list = realloc(*list, capacity * sizeof((*list)[0]));
+			*list = arena_realloc(parser->arena, *list, old_capacity * sizeof((*list)[0]), capacity * sizeof((*list)[0]));
 		}
 
 		TRY(eat_identifier(parser, &(*list)[*n]));
@@ -665,7 +757,7 @@ identifier_list(Parser *parser, Identifier **list, size_t *n, TokenKind separato
 static Ast *
 primary(Parser *parser)
 {
-	AST_CREATE(Ast, ast, AST_NULL);
+	Ast *ast = ast_create(parser->arena, AST_NULL);
 	Token token = discard(parser);
 	switch (token.kind) {
 	case TK_NUMBER:
@@ -705,7 +797,7 @@ primary(Parser *parser)
 static Ast *
 ident(Parser *parser)
 {
-	AST_CREATE(AstVariableAccess, variable_access, AST_VARIABLE_ACCESS);
+	AstVariableAccess *variable_access = ast_create(parser->arena, AST_VARIABLE_ACCESS);
 	TRY(eat_identifier(parser, &variable_access->name));
 	return (Ast *) variable_access;
 }
@@ -713,7 +805,7 @@ ident(Parser *parser)
 static Ast *
 block(Parser *parser)
 {
-	AST_CREATE(AstBlock, block, AST_BLOCK);
+	AstBlock *block = ast_create(parser->arena, AST_BLOCK);
 	TRY(eat(parser, TK_BEGIN));
 	TRY(expression_list(parser, &block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_END));
 	return (Ast *) block;
@@ -722,7 +814,7 @@ block(Parser *parser)
 static Ast *
 let(Parser *parser)
 {
-	AST_CREATE(AstVariable, variable, AST_VARIABLE);
+	AstVariable *variable = ast_create(parser->arena, AST_VARIABLE);
 	TRY(eat(parser, TK_LET));
 	TRY(eat_identifier(parser, &variable->name));
 	TRY(eat(parser, TK_EQUAL));
@@ -733,7 +825,7 @@ let(Parser *parser)
 static Ast *
 array(Parser *parser)
 {
-	AST_CREATE(AstArray, array, AST_ARRAY);
+	AstArray *array = ast_create(parser->arena, AST_ARRAY);
 	TRY(eat(parser, TK_ARRAY));
 	TRY(eat(parser, TK_LPAREN));
 	TRY(array->size = expression(parser));
@@ -746,7 +838,7 @@ array(Parser *parser)
 static Ast *
 object(Parser *parser)
 {
-	AST_CREATE(AstObject, object, AST_OBJECT);
+	AstObject *object = ast_create(parser->arena, AST_OBJECT);
 	TRY(eat(parser, TK_OBJECT));
 	if (try_eat(parser, TK_EXTENDS)) {
 		TRY(object->extends = expression(parser));
@@ -761,7 +853,7 @@ object(Parser *parser)
 static Ast *
 cond(Parser *parser)
 {
-	AST_CREATE(AstConditional, conditional, AST_IF);
+	AstConditional *conditional = ast_create(parser->arena, AST_IF);
 	TRY(eat(parser, TK_IF));
 	TRY(conditional->condition = expression(parser));
 	TRY(eat(parser, TK_THEN));
@@ -777,7 +869,7 @@ cond(Parser *parser)
 static Ast *
 loop(Parser *parser)
 {
-	AST_CREATE(AstLoop, loop, AST_WHILE);
+	AstLoop *loop = ast_create(parser->arena, AST_WHILE);
 	TRY(eat(parser, TK_WHILE));
 	TRY(loop->condition = expression(parser));
 	TRY(eat(parser, TK_DO));
@@ -788,7 +880,7 @@ loop(Parser *parser)
 static Ast *
 print(Parser *parser)
 {
-	AST_CREATE(AstPrint, print, AST_PRINT);
+	AstPrint *print = ast_create(parser->arena, AST_PRINT);
 	TRY(eat(parser, TK_PRINT));
 	TRY(eat(parser, TK_LPAREN));
 	TRY(eat_string(parser, &print->format));
@@ -814,7 +906,7 @@ paren(Parser *parser)
 static Ast *
 function(Parser *parser)
 {
-	AST_CREATE(AstFunction, function, AST_FUNCTION);
+	AstFunction *function = ast_create(parser->arena, AST_FUNCTION);
 	TRY(eat(parser, TK_FUNCTION));
 	TRY(eat_identifier(parser, &function->name));
 	TRY(eat(parser, TK_LPAREN));
@@ -836,13 +928,12 @@ stop(Parser *parser, Ast *left, int rbp)
 static Ast *
 binop(Parser *parser, Ast *left, int rbp)
 {
-	AST_CREATE(AstMethodCall, method_call, AST_METHOD_CALL);
+	AstMethodCall *method_call = ast_create(parser->arena, AST_METHOD_CALL);
 	Token token = discard(parser);
 	method_call->object = left;
 	method_call->name.name = token.pos;
 	method_call->name.len = token.end - token.pos;
-	method_call->arguments = malloc(sizeof(*method_call->arguments));
-	// TODO: leaked malloc
+	method_call->arguments = arena_alloc(parser->arena, sizeof(*method_call->arguments));
 	TRY(method_call->arguments[0] = expression_bp(parser, rbp));
 	//TRY(method_call->arguments = expression_bp(parser, rbp));
 	method_call->argument_cnt = 1;
@@ -885,7 +976,7 @@ indexing(Parser *parser, Ast *left, int rbp)
 {
 	// rbp not used - delimited by TK_RBRACKET, not by precedence
 	(void) rbp;
-	AST_CREATE(AstIndexAccess, index_access, AST_INDEX_ACCESS);
+	AstIndexAccess *index_access = ast_create(parser->arena, AST_INDEX_ACCESS);
 	TRY(eat(parser, TK_LBRACKET));
 	index_access->object = left;
 	TRY(index_access->index = expression(parser));
@@ -897,7 +988,7 @@ static Ast *
 field(Parser *parser, Ast *left, int rbp)
 {
 	(void) rbp;
-	AST_CREATE(AstFieldAccess, field_access, AST_FIELD_ACCESS);
+	AstFieldAccess *field_access = ast_create(parser->arena, AST_FIELD_ACCESS);
 	TRY(eat(parser, TK_DOT));
 	field_access->object = left;
 	TRY(eat_identifier(parser, &field_access->field));
@@ -995,11 +1086,11 @@ expression_bp(Parser *parser, int bp)
 }
 
 Ast *
-parse(u8 *buf, size_t buf_len)
+parse(Arena *arena, u8 *buf, size_t buf_len)
 {
 	Parser parser;
-	parser_init(&parser, buf, buf_len);
-	AST_CREATE(AstTop, top, AST_TOP);
+	parser_init(&parser, arena, buf, buf_len);
+	AstTop *top = ast_create(parser.arena, AST_TOP);
 	// TODO: distinguish at the parser level an empty program (evaluates to null)
 	TRY(expression_list(&parser, &top->expressions, &top->expression_cnt, TK_SEMICOLON, TK_EOF));
 	return (Ast *) top;
@@ -1296,7 +1387,6 @@ builtin_print(Identifier format, Value *arguments, size_t argument_cnt)
 			case  '"': c =  '"'; break;
 			case '\\': c = '\\'; break;
 			default:
-				fprintf(stderr, "invalid string escape sequence: %c", c);
 				assert(false);
 			}
 			putchar(c);
@@ -2959,6 +3049,10 @@ write_program(Program *program, FILE *f)
 
 int
 main(int argc, char **argv) {
+
+	Arena arena_;
+	Arena *arena = &arena_;
+	arena_init(arena);
 	if(argc != 3) {
 		return 1;
 	}
@@ -2966,16 +3060,16 @@ main(int argc, char **argv) {
 	fseek(f, 0, SEEK_END);
 	long fsize = ftell(f);
 	fseek(f, 0, SEEK_SET);
-	u8 *buf = malloc(fsize);
+	u8 *buf = arena_alloc(arena, fsize);
 	fread(buf, fsize, 1, f);
 	fclose(f);
 
 	if (strcmp(argv[1], "run_ast") == 0) {
-		Ast *ast = parse(buf, fsize);
+		Ast *ast = parse(arena, buf, fsize);
 		assert(ast);
 		interpret_ast(ast);
 	} else if (strcmp(argv[1], "run") == 0) {
-		Ast *ast = parse(buf, fsize);
+		Ast *ast = parse(arena, buf, fsize);
 		assert(ast);
 		Program program;
 		compile_ast(&program, ast);
@@ -2985,14 +3079,14 @@ main(int argc, char **argv) {
 		read_program(&program, buf, fsize);
 		vm_run(&program);
 	} else if (strcmp(argv[1], "compile") == 0) {
-		Ast *ast = parse(buf, fsize);
+		Ast *ast = parse(arena, buf, fsize);
 		assert(ast);
 		Program program;
 		compile_ast(&program, ast);
 		write_program(&program, stdout);
 		fflush(stdout);
 	} else if (strcmp(argv[1], "serde") == 0) {
-		Ast *ast = parse(buf, fsize);
+		Ast *ast = parse(arena, buf, fsize);
 		assert(ast);
 		Program program;
 		compile_ast(&program, ast);
@@ -3003,13 +3097,13 @@ main(int argc, char **argv) {
 		fseek(f, 0, SEEK_END);
 		long fsize = ftell(f);
 		fseek(f, 0, SEEK_SET);
-		u8 *buf = malloc(fsize);
+		u8 *buf = arena_alloc(arena, fsize);
 		fread(buf, fsize, 1, f);
 		fclose(f);
 		Program program2;
 		read_program(&program2, buf, fsize);
 		vm_run(&program2);
 	}
-	free(buf);
-	return 0;
+	arena_destroy(arena);
+	return EXIT_SUCCESS;
 }
