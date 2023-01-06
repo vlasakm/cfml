@@ -1495,7 +1495,7 @@ table_init(Table *table, size_t capacity)
 }
 
 void
-table_free(Table *table)
+table_destroy(Table *table)
 {
 	free(table->entries);
 }
@@ -1584,9 +1584,9 @@ env_create(Environment *prev)
 }
 
 void
-env_free(Environment *env)
+env_destroy(Environment *env)
 {
-	table_free(&env->env);
+	table_destroy(&env->env);
 	free(env);
 }
 
@@ -1775,7 +1775,7 @@ interpret(InterpreterState *is, Ast *ast)
 		for (size_t i = 1; i < block->expression_cnt; i++) {
 			value = interpret(is, block->expressions[i]);
 		}
-		env_free(is->env);
+		env_destroy(is->env);
 		is->env = saved_env;
 		return value;
 	}
@@ -1826,9 +1826,8 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 			env_define(is->env, THIS, object);
 		}
 		return_value = interpret(is, function->function.body);
-		env_free(is->env);
+		env_destroy(is->env);
 		is->env = saved_env;
-		return return_value;
 	} else {
 		return_value = value_call_primitive_method(object, method, &arguments[0], argument_cnt);
 	}
@@ -1845,6 +1844,7 @@ interpret_ast(Ast *ast)
 		.global_env = env,
 	};
 	interpret(&is, ast);
+	env_destroy(env);
 }
 
 // Parse little endian numbers from byte array.Beware of implicit promotion from uint8_t to signed int.
@@ -2337,6 +2337,7 @@ vm_run(Program *program)
 	};
 	vm.global = vm_instantiate_class(&vm, &program->global_class, make_null_vm);
 	vm_call_method(&vm, program->entry_point, 0);
+	table_destroy(&label_offsets);
 	// Check that the program left exactly one value on the stack
 	assert(vm.stack_pos == 0);
 }
@@ -2602,7 +2603,7 @@ compile(CompilerState *cs, Ast *ast)
 		}
 		compile(cs, function->body);
 		op(cs, OP_RETURN);
-		env_free(cs->env);
+		env_destroy(cs->env);
 
 		u16 name_constant = add_string(cs, function->name);
 		u16 method = add_constant(cs, (Constant) {
@@ -2780,7 +2781,7 @@ compile(CompilerState *cs, Ast *ast)
 			op(cs, OP_DROP);
 			compile(cs, block->expressions[i]);
 		}
-		env_free(cs->env);
+		env_destroy(cs->env);
 		cs->env = saved_environment;
 		cs->in_block = saved_in_block;
 		return;
