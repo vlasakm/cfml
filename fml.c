@@ -884,11 +884,21 @@ print(Parser *parser)
 	TRY(eat(parser, TK_PRINT));
 	TRY(eat(parser, TK_LPAREN));
 	TRY(eat_string(parser, &print->format));
+	size_t formats = 0;
+	for (size_t i = 0; i < print->format.len; i++) {
+		switch (print->format.name[i]) {
+		case '\\':
+			continue;
+		case '~':
+			formats += 1;
+		}
+	}
 	if (try_eat(parser, TK_COMMA)) {
 		TRY(expression_list(parser, &print->arguments, &print->argument_cnt, TK_COMMA, TK_RPAREN));
 	} else {
 		TRY(eat(parser, TK_RPAREN));
 	}
+	assert(formats == print->argument_cnt);
 	return (Ast *) print;
 }
 
