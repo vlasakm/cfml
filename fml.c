@@ -3,10 +3,12 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdalign.h>
 #include <string.h>
 #include <assert.h>
 #include <inttypes.h>
+#include <setjmp.h>
 
 #define PROJECT_NAME "fml"
 
@@ -118,11 +120,78 @@ arena_restore(Arena *arena, size_t pos)
 	arena->current = chunk;
 }
 
+u8 *
+arena_vaprintf(Arena *arena, const char *fmt, va_list ap)
+{
+	va_list ap_orig;
+	// save original va_list (vprintf changes it)
+	va_copy(ap_orig, ap);
+
+	size_t available = arena->current->size - arena->current->pos;
+	void *mem = &arena->current->mem[arena->current->pos];
+	int len = vsnprintf(mem, available, fmt, ap);
+	assert(len >= 0);
+	len += 1;
+	if ((size_t) len <= available) {
+		arena->current->pos += (size_t) len;
+		va_copy(ap, ap_orig);
+		mem = arena_alloc(arena, (size_t) len);
+		len = vsnprintf(mem, (size_t) len, fmt, ap);
+	}
+	return mem;
+}
+
+typedef struct Error Error;
+struct Error {
+	Error *next;
+	char *kind;
+	const u8 *pos;
+	u8 *msg;
+};
+
+typedef struct {
+	Arena *arena;
+	const u8 *source;
+	size_t source_len;
+	Error *error_head;
+	Error *error_tail;
+	jmp_buf loc;
+} ErrorContext;
+
+ErrorContext ec = { 0 };
+
+static void
+verror(ErrorContext *ec, const u8 *pos, char *kind, bool fatal, const char *fmt, va_list ap)
+{
+	Error *error = arena_alloc(ec->arena, sizeof(*error));
+	error->msg = arena_vaprintf(ec->arena, fmt, ap);
+error->pos = pos;
+	error->kind = kind;
+	error->next = NULL;
+	if (ec->error_tail) {
+		ec->error_tail->next = error;
+	}
+	ec->error_tail = error;
+	if (!ec->error_head) {
+		ec->error_head = error;
+	}
+	if (fatal) {
+		longjmp(ec->loc, 1);
+	}
+}
+
+static void __attribute__((format(printf, 5, 6)))
+error(ErrorContext *ec, const u8 *pos, char *kind, bool fatal, const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	verror(ec, pos, kind, fatal, fmt, ap);
+	va_end(ap);
+}
+
 typedef struct {
 	const u8 *pos;
 	const u8 *end;
-	const u8 *line_start;
-	size_t line_num; // zero-based
 } Lexer;
 
 typedef enum {
@@ -228,8 +297,6 @@ typedef struct {
 	TokenKind kind;
 	const u8 *pos;
 	const u8 *end;
-	size_t line;
-	size_t col;
 } Token;
 
 Lexer
@@ -238,8 +305,6 @@ lex_init(const u8 *buf, size_t size)
 	return (Lexer) {
 		.pos = buf,
 		.end = buf + size,
-		.line_start = buf,
-		.line_num = 0,
 	};
 }
 
@@ -259,8 +324,7 @@ lex_next(Lexer *lexer, Token *token)
 		u8 c = *lexer->pos;
 		switch (state) {
 		case LS_START: switch (c) {
-			case '\n': lexer->line_start = start += 1; lexer->line_num += 1; break;
-			case ' ': case '\t': start += 1; break;
+			case ' ': case '\t': case '\n': start += 1; break;
 			case ALPHA: state = LS_IDENTIFIER; break;
 			case DIGIT: state = LS_NUMBER; break;
 			case '"': state = LS_STRING; start += 1; break;
@@ -306,24 +370,12 @@ lex_next(Lexer *lexer, Token *token)
 			default: tok = TK_SLASH; goto prev_done;
 		}; break;
 		case LS_LINE_COMMENT: switch (c) {
-			case '\n':
-				state = LS_START;
-				lexer->line_start = start = lexer->pos + 1;
-				lexer->line_num += 1;
-				break;
+			case '\n': state = LS_START; start = lexer->pos + 1; break;
 		}; break;
 		case LS_BLOCK_COMMENT: switch (c) {
-			case '\n':
-				lexer->line_start = lexer->pos + 1;
-				lexer->line_num += 1;
-				break;
 			case '*': state = LS_BLOCK_COMMENT_STAR; break;
 		}; break;
 		case LS_BLOCK_COMMENT_STAR: switch (c) {
-			case '\n':
-				lexer->line_start = lexer->pos + 1;
-				lexer->line_num += 1;
-				break;
 			case '*': break;
 			case '/': state = LS_START; start = lexer->pos + 1; break;
 			default: state = LS_BLOCK_COMMENT; break;
@@ -369,8 +421,6 @@ done:
 prev_done:
 err:
 	length = lexer->pos - start + end_offset;
-	size_t line = lexer->line_num + 1;
-	size_t col = start - lexer->line_start + 1;
 	if (tok == TK_IDENTIFIER) {
 		for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
 			if (strlen(keywords[i].str) == length && memcmp((const char*) start, keywords[i].str, length) == 0) {
@@ -382,8 +432,6 @@ err:
 	token->kind = tok;
 	token->pos = start;
 	token->end = lexer->pos + end_offset;
-	token->line = line;
-	token->col = col;
 }
 
 typedef struct {
@@ -596,15 +644,29 @@ union Ast {
 typedef struct {
 	Lexer lexer;
 	Token lookahead;
+	Token prev;
 	Arena *arena;
+	ErrorContext *ec;
 } Parser;
 
 void
-parser_init(Parser *parser, Arena *arena, const u8 *buf, size_t buf_len)
+parser_init(Parser *parser, ErrorContext *ec, Arena *arena, const u8 *buf, size_t buf_len)
 {
-	parser->lexer = lex_init(buf, buf_len);
+	ec->source = buf;
+	ec->source_len = buf_len;
+	parser->ec = ec;
 	parser->arena = arena;
+	parser->lexer = lex_init(buf, buf_len);
 	lex_next(&parser->lexer, &parser->lookahead);
+}
+
+static void
+parser_error(Parser *parser, Token errtok, const char *msg, ...)
+{
+	va_list ap;
+	va_start(ap, msg);
+	verror(parser->ec, errtok.pos, "parse", true, msg, ap);
+	va_end(ap);
 }
 
 static TokenKind
@@ -614,48 +676,48 @@ peek(const Parser *parser)
 }
 
 static Token
-discard(Parser *parser)
+peek_tok(Parser *parser)
 {
-	Token prev = parser->lookahead;
-	lex_next(&parser->lexer, &parser->lookahead);
-	return prev;
+	return parser->lookahead;
 }
 
-static bool
+static Token
+discard(Parser *parser)
+{
+	parser->prev = parser->lookahead;
+	lex_next(&parser->lexer, &parser->lookahead);
+	return parser->prev;
+}
+
+static void
 eat(Parser *parser, TokenKind kind)
 {
 	Token tok = discard(parser);
 	if (tok.kind != kind) {
-		fprintf(stderr, "expected %s, found %s\n", tok_repr[kind], tok_repr[tok.kind]);
-		return false;
+		parser_error(parser, tok, "expected %s, found %s", tok_repr[kind], tok_repr[tok.kind]);
 	}
-	return true;
 }
 
-static bool
+static void
 eat_identifier(Parser *parser, Identifier *identifier)
 {
 	Token tok = discard(parser);
 	if (!tok_is_identifier(tok.kind)) {
-		fprintf(stderr, "expected an identifier, found %s\n", tok_repr[tok.kind]);
-		return false;
+		parser_error(parser, tok, "expected %s, found %s", tok_repr[TK_IDENTIFIER], tok_repr[tok.kind]);
 	}
 	identifier->name = tok.pos;
 	identifier->len = tok.end - tok.pos;
-	return true;
 }
 
-static Identifier *
+static void
 eat_string(Parser *parser, Identifier *identifier)
 {
 	Token tok = discard(parser);
 	if (tok.kind != TK_STRING) {
 		printf("expected %s, found %s\n", tok_repr[TK_STRING], tok_repr[tok.kind]);
-		return false;
 	}
 	identifier->name = tok.pos;
 	identifier->len = tok.end - tok.pos;
-	return identifier;
 }
 
 static bool
@@ -684,8 +746,6 @@ create_null(Parser *parser)
 	return ast;
 }
 
-#define TRY(arg) do { if (!(arg)) { return NULL; } } while(0)
-
 static Ast *expression_bp(Parser *parser, int bp);
 
 static Ast *
@@ -709,12 +769,12 @@ expression_list(Parser *parser, Ast ***list, size_t *n, TokenKind separator, Tok
 		}
 
 		Ast *expr;
-		TRY(expr = expression(parser));
+		expr = expression(parser);
 		(*list)[*n] = expr;
 		*n += 1;
 
 		if (!try_eat(parser, separator)) {
-			TRY(eat(parser, terminator));
+			eat(parser, terminator);
 			return true;
 		}
 	}
@@ -736,11 +796,11 @@ identifier_list(Parser *parser, Identifier **list, size_t *n, TokenKind separato
 			*list = arena_realloc(parser->arena, *list, old_capacity * sizeof((*list)[0]), capacity * sizeof((*list)[0]));
 		}
 
-		TRY(eat_identifier(parser, &(*list)[*n]));
+		eat_identifier(parser, &(*list)[*n]);
 		*n += 1;
 
 		if (!try_eat(parser, separator)) {
-			TRY(eat(parser, terminator));
+			eat(parser, terminator);
 			return true;
 		}
 	}
@@ -793,7 +853,7 @@ static Ast *
 ident(Parser *parser)
 {
 	AstVariableAccess *variable_access = ast_create(parser->arena, AST_VARIABLE_ACCESS);
-	TRY(eat_identifier(parser, &variable_access->name));
+	eat_identifier(parser, &variable_access->name);
 	return (Ast *) variable_access;
 }
 
@@ -801,8 +861,8 @@ static Ast *
 block(Parser *parser)
 {
 	AstBlock *block = ast_create(parser->arena, AST_BLOCK);
-	TRY(eat(parser, TK_BEGIN));
-	TRY(expression_list(parser, &block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_END));
+	eat(parser, TK_BEGIN);
+	expression_list(parser, &block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_END);
 	return (Ast *) block;
 }
 
@@ -810,10 +870,10 @@ static Ast *
 let(Parser *parser)
 {
 	AstVariable *variable = ast_create(parser->arena, AST_VARIABLE);
-	TRY(eat(parser, TK_LET));
-	TRY(eat_identifier(parser, &variable->name));
-	TRY(eat(parser, TK_EQUAL));
-	TRY(variable->value = expression(parser));
+	eat(parser, TK_LET);
+	eat_identifier(parser, &variable->name);
+	eat(parser, TK_EQUAL);
+	variable->value = expression(parser);
 	return (Ast *) variable;
 }
 
@@ -821,12 +881,12 @@ static Ast *
 array(Parser *parser)
 {
 	AstArray *array = ast_create(parser->arena, AST_ARRAY);
-	TRY(eat(parser, TK_ARRAY));
-	TRY(eat(parser, TK_LPAREN));
-	TRY(array->size = expression(parser));
-	TRY(eat(parser, TK_COMMA));
-	TRY(array->initializer = expression(parser));
-	TRY(eat(parser, TK_RPAREN));
+	eat(parser, TK_ARRAY);
+	eat(parser, TK_LPAREN);
+	array->size = expression(parser);
+	eat(parser, TK_COMMA);
+	array->initializer = expression(parser);
+	eat(parser, TK_RPAREN);
 	return (Ast *) array;
 }
 
@@ -834,14 +894,14 @@ static Ast *
 object(Parser *parser)
 {
 	AstObject *object = ast_create(parser->arena, AST_OBJECT);
-	TRY(eat(parser, TK_OBJECT));
+	eat(parser, TK_OBJECT);
 	if (try_eat(parser, TK_EXTENDS)) {
-		TRY(object->extends = expression(parser));
+		object->extends = expression(parser);
 	} else {
 		object->extends = create_null(parser);
 	}
-	TRY(eat(parser, TK_BEGIN));
-	TRY(expression_list(parser, &object->members, &object->member_cnt, TK_SEMICOLON, TK_END));
+	eat(parser, TK_BEGIN);
+	expression_list(parser, &object->members, &object->member_cnt, TK_SEMICOLON, TK_END);
 	return (Ast *) object;
 }
 
@@ -849,12 +909,12 @@ static Ast *
 cond(Parser *parser)
 {
 	AstConditional *conditional = ast_create(parser->arena, AST_IF);
-	TRY(eat(parser, TK_IF));
-	TRY(conditional->condition = expression(parser));
-	TRY(eat(parser, TK_THEN));
-	TRY(conditional->consequent = expression(parser));
+	eat(parser, TK_IF);
+	conditional->condition = expression(parser);
+	eat(parser, TK_THEN);
+	conditional->consequent = expression(parser);
 	if (try_eat(parser, TK_ELSE)) {
-		TRY(conditional->alternative = expression(parser));
+		conditional->alternative = expression(parser);
 	} else {
 		conditional->alternative = create_null(parser);
 	}
@@ -865,10 +925,10 @@ static Ast *
 loop(Parser *parser)
 {
 	AstLoop *loop = ast_create(parser->arena, AST_WHILE);
-	TRY(eat(parser, TK_WHILE));
-	TRY(loop->condition = expression(parser));
-	TRY(eat(parser, TK_DO));
-	TRY(loop->body = expression(parser));
+	eat(parser, TK_WHILE);
+	loop->condition = expression(parser);
+	eat(parser, TK_DO);
+	loop->body = expression(parser);
 	return (Ast *) loop;
 }
 
@@ -876,24 +936,25 @@ static Ast *
 print(Parser *parser)
 {
 	AstPrint *print = ast_create(parser->arena, AST_PRINT);
-	TRY(eat(parser, TK_PRINT));
-	TRY(eat(parser, TK_LPAREN));
-	TRY(eat_string(parser, &print->format));
+	eat(parser, TK_PRINT);
+	eat(parser, TK_LPAREN);
+	Token fmt_tok = peek_tok(parser);
+	eat_string(parser, &print->format);
 	size_t formats = 0;
 	for (size_t i = 0; i < print->format.len; i++) {
 		switch (print->format.name[i]) {
-		case '\\':
-			continue;
-		case '~':
-			formats += 1;
+		case '\\': continue;
+		case '~': formats += 1;
 		}
 	}
 	if (try_eat(parser, TK_COMMA)) {
-		TRY(expression_list(parser, &print->arguments, &print->argument_cnt, TK_COMMA, TK_RPAREN));
+		expression_list(parser, &print->arguments, &print->argument_cnt, TK_COMMA, TK_RPAREN);
 	} else {
-		TRY(eat(parser, TK_RPAREN));
+		eat(parser, TK_RPAREN);
 	}
-	assert(formats == print->argument_cnt);
+	if (formats != print->argument_cnt) {
+		parser_error(parser, fmt_tok, "Invalid number of print arguments: %zu expected, got %zu", formats, print->argument_cnt);
+	}
 	return (Ast *) print;
 }
 
@@ -901,9 +962,9 @@ static Ast *
 paren(Parser *parser)
 {
 	Ast *ast;
-	TRY(eat(parser, TK_LPAREN));
-	TRY(ast = expression(parser));
-	TRY(eat(parser, TK_RPAREN));
+	eat(parser, TK_LPAREN);
+	ast = expression(parser);
+	eat(parser, TK_RPAREN);
 	return ast;
 }
 
@@ -912,12 +973,12 @@ static Ast *
 function(Parser *parser)
 {
 	AstFunction *function = ast_create(parser->arena, AST_FUNCTION);
-	TRY(eat(parser, TK_FUNCTION));
-	TRY(eat_identifier(parser, &function->name));
-	TRY(eat(parser, TK_LPAREN));
-	TRY(identifier_list(parser, &function->parameters, &function->parameter_cnt, TK_COMMA, TK_RPAREN));
-	TRY(eat(parser, TK_RARROW));
-	TRY(function->body = expression(parser));
+	eat(parser, TK_FUNCTION);
+	eat_identifier(parser, &function->name);
+	eat(parser, TK_LPAREN);
+	identifier_list(parser, &function->parameters, &function->parameter_cnt, TK_COMMA, TK_RPAREN);
+	eat(parser, TK_RARROW);
+	function->body = expression(parser);
 	return (Ast *) function;
 }
 
@@ -939,8 +1000,8 @@ binop(Parser *parser, Ast *left, int rbp)
 	method_call->name.name = token.pos;
 	method_call->name.len = token.end - token.pos;
 	method_call->arguments = arena_alloc(parser->arena, sizeof(*method_call->arguments));
-	TRY(method_call->arguments[0] = expression_bp(parser, rbp));
-	//TRY(method_call->arguments = expression_bp(parser, rbp));
+	method_call->arguments[0] = expression_bp(parser, rbp);
+	//method_call->arguments = expression_bp(parser, rbp);
 	method_call->argument_cnt = 1;
 	return (Ast *) method_call;
 }
@@ -951,14 +1012,14 @@ call(Parser *parser, Ast *left, int rbp)
 	(void) rbp;
 	// NOTE: In this function we change Ast's from one kind to other, so we
 	// copy the old structs to avoid problems with aliasing union fields
-	TRY(eat(parser, TK_LPAREN));
+	eat(parser, TK_LPAREN);
 	switch (left->kind) {
 	case AST_VARIABLE_ACCESS: {
 		left->kind = AST_FUNCTION_CALL;
 		AstVariableAccess variable_access = left->variable_access;
 		AstFunctionCall *function_call = &left->function_call;
 		function_call->name = variable_access.name;
-		TRY(expression_list(parser, &function_call->arguments, &function_call->argument_cnt, TK_COMMA, TK_RPAREN));
+		expression_list(parser, &function_call->arguments, &function_call->argument_cnt, TK_COMMA, TK_RPAREN);
 		return left;
 	}
 	case AST_FIELD_ACCESS: {
@@ -967,12 +1028,12 @@ call(Parser *parser, Ast *left, int rbp)
 		AstMethodCall *method_call = &left->method_call;
 		method_call->object = field_access.object;
 		method_call->name = field_access.field;
-		TRY(expression_list(parser, &method_call->arguments, &method_call->argument_cnt, TK_COMMA, TK_RPAREN));
+		expression_list(parser, &method_call->arguments, &method_call->argument_cnt, TK_COMMA, TK_RPAREN);
 		return left;
 	}
 	default:
-		fprintf(stderr, "invalid call target, expected variable or field\n");
-		return NULL;
+		parser_error(parser, parser->prev, "Invalid call target, expected variable or field access");
+		return left;
 	}
 }
 
@@ -982,10 +1043,10 @@ indexing(Parser *parser, Ast *left, int rbp)
 	// rbp not used - delimited by TK_RBRACKET, not by precedence
 	(void) rbp;
 	AstIndexAccess *index_access = ast_create(parser->arena, AST_INDEX_ACCESS);
-	TRY(eat(parser, TK_LBRACKET));
+	eat(parser, TK_LBRACKET);
 	index_access->object = left;
-	TRY(index_access->index = expression(parser));
-	TRY(eat(parser, TK_RBRACKET));
+	index_access->index = expression(parser);
+	eat(parser, TK_RBRACKET);
 	return (Ast *) index_access;
 }
 
@@ -994,9 +1055,9 @@ field(Parser *parser, Ast *left, int rbp)
 {
 	(void) rbp;
 	AstFieldAccess *field_access = ast_create(parser->arena, AST_FIELD_ACCESS);
-	TRY(eat(parser, TK_DOT));
+	eat(parser, TK_DOT);
 	field_access->object = left;
-	TRY(eat_identifier(parser, &field_access->field));
+	eat_identifier(parser, &field_access->field);
 	return (Ast *) field_access;
 }
 
@@ -1005,14 +1066,14 @@ assign(Parser *parser, Ast *left, int rbp)
 {
 	// NOTE: In this function we change Ast's from one kind to other, so we
 	// copy the old structs to avoid problems with aliasing union fields
-	TRY(eat(parser, TK_LARROW));
+	eat(parser, TK_LARROW);
 	switch (left->kind) {
 	case AST_VARIABLE_ACCESS: {
 		left->kind = AST_VARIABLE_ASSIGNMENT;
 		AstVariableAccess variable_access = left->variable_access;
 		AstVariableAssignment *variable_assignment = &left->variable_assignment;
 		variable_assignment->name = variable_access.name;
-		TRY(variable_assignment->value = expression_bp(parser, rbp));
+		variable_assignment->value = expression_bp(parser, rbp);
 		return left;
 	}
 	case AST_FIELD_ACCESS: {
@@ -1021,7 +1082,7 @@ assign(Parser *parser, Ast *left, int rbp)
 		AstFieldAssignment *field_assignment = &left->field_assignment;
 		field_assignment->object = field_access.object;
 		field_assignment->field = field_access.field;
-		TRY(field_assignment->value = expression_bp(parser, rbp));
+		field_assignment->value = expression_bp(parser, rbp);
 		return left;
 	}
 	case AST_INDEX_ACCESS: {
@@ -1030,12 +1091,11 @@ assign(Parser *parser, Ast *left, int rbp)
 		AstIndexAssignment *index_assignment = &left->index_assignment;
 		index_assignment->object = index_access.object;
 		index_assignment->index = index_access.index;
-		TRY(index_assignment->value = expression_bp(parser, rbp));
+		index_assignment->value = expression_bp(parser, rbp);
 		return left;
 	}
 	default:
-		fprintf(stderr, "invalid assignment target, expected variable or field\n");
-		return NULL;
+		parser_error(parser, parser->prev, "Invalid assignment left hand side, expected variable, index or field access");
 	}
 }
 
@@ -1069,35 +1129,37 @@ expression_bp(Parser *parser, int bp)
 	Ast *left;
 
 	if (!ni.nud) {
-		fprintf(stderr, "invalid start of expression: %s\n", tok_repr[token]);
-		return NULL;
+		parser_error(parser, parser->lookahead, "Invalid start of expression %s", tok_repr[token]);
 	}
-	TRY(left = ni.nud(parser));
+	left = ni.nud(parser);
 
 	for (;;) {
 		token = peek(parser);
 		LeftInfo li = left_info[token];
 		if (!li.led) {
-			fprintf(stderr, "invalid token at border of expression: %s\n", tok_repr[token]);
-			return NULL;
+			if (token == TK_EQUAL) {
+				parser_error(parser, parser->lookahead, "Unexpected %s, did you mean to use %s for assignment?", tok_repr[TK_EQUAL], tok_repr[TK_LARROW]);
+			} else {
+				parser_error(parser, parser->lookahead, "Invalid expression continuing/ending token %s", tok_repr[token]);
+			}
 		}
 		if (li.lbp < bp) {
 			break;
 		}
-		TRY(left = li.led(parser, left, li.rbp));
+		left = li.led(parser, left, li.rbp);
 	}
 
 	return left;
 }
 
 Ast *
-parse(Arena *arena, u8 *buf, size_t buf_len)
+parse(ErrorContext *ec, Arena *arena, u8 *buf, size_t buf_len)
 {
 	Parser parser;
-	parser_init(&parser, arena, buf, buf_len);
+	parser_init(&parser, ec, arena, buf, buf_len);
 	AstTop *top = ast_create(parser.arena, AST_TOP);
 	// TODO: distinguish at the parser level an empty program (evaluates to null)
-	TRY(expression_list(&parser, &top->expressions, &top->expression_cnt, TK_SEMICOLON, TK_EOF));
+	expression_list(&parser, &top->expressions, &top->expression_cnt, TK_SEMICOLON, TK_EOF);
 	return (Ast *) top;
 }
 
@@ -1391,15 +1453,13 @@ builtin_print(Identifier format, Value *arguments, size_t argument_cnt)
 			case  '~': c =  '~'; break;
 			case  '"': c =  '"'; break;
 			case '\\': c = '\\'; break;
-			default:
-				assert(false);
+			default: UNREACHABLE();
 			}
 			putchar(c);
 		} else {
 			switch (c) {
 			case '\\': in_escape = true; break;
 			case '~':
-				assert(arg_index < argument_cnt);
 				value_print(arguments[arg_index]);
 				arg_index += 1;
 				break;
@@ -3058,6 +3118,7 @@ main(int argc, char **argv) {
 	Arena arena_;
 	Arena *arena = &arena_;
 	arena_init(arena);
+	ec.arena = arena;
 	if(argc != 3) {
 		return 1;
 	}
@@ -3069,12 +3130,16 @@ main(int argc, char **argv) {
 	fread(buf, fsize, 1, f);
 	fclose(f);
 
+	if (setjmp(ec.loc) != 0) {
+		goto end;
+	}
+
 	if (strcmp(argv[1], "run_ast") == 0) {
-		Ast *ast = parse(arena, buf, fsize);
+		Ast *ast = parse(&ec, arena, buf, fsize);
 		assert(ast);
 		interpret_ast(ast);
 	} else if (strcmp(argv[1], "run") == 0) {
-		Ast *ast = parse(arena, buf, fsize);
+		Ast *ast = parse(&ec, arena, buf, fsize);
 		assert(ast);
 		Program program;
 		compile_ast(&program, ast);
@@ -3084,14 +3149,14 @@ main(int argc, char **argv) {
 		read_program(&program, buf, fsize);
 		vm_run(&program);
 	} else if (strcmp(argv[1], "compile") == 0) {
-		Ast *ast = parse(arena, buf, fsize);
+		Ast *ast = parse(&ec, arena, buf, fsize);
 		assert(ast);
 		Program program;
 		compile_ast(&program, ast);
 		write_program(&program, stdout);
 		fflush(stdout);
 	} else if (strcmp(argv[1], "serde") == 0) {
-		Ast *ast = parse(arena, buf, fsize);
+		Ast *ast = parse(&ec, arena, buf, fsize);
 		assert(ast);
 		Program program;
 		compile_ast(&program, ast);
@@ -3109,6 +3174,27 @@ main(int argc, char **argv) {
 		read_program(&program2, buf, fsize);
 		vm_run(&program2);
 	}
+
+end:
+	for (Error *err = ec.error_head; err; err = err->next) {
+		const u8 *line_start = ec.source;
+		size_t line = 0;
+		const u8 *pos = ec.source;
+		for (; pos < err->pos; pos++) {
+			if (*pos == '\n') {
+				line_start = pos + 1;
+				line++;
+			}
+		}
+		size_t col = pos - line_start;
+		const u8 *source_end = ec.source + ec.source_len;
+		const u8 *line_end = pos;
+		for (; line_end < source_end && *line_end != '\n'; line_end++);
+		fprintf(stderr, "[%zu:%zu]: %s error: %s\n", line + 1, col + 1, err->kind, err->msg);
+		fprintf(stderr, "  %.*s\n", (int) (line_end - line_start), line_start);
+		fprintf(stderr, "  %*s\n", (int) (pos - line_start + 1), "^");
+	}
+
 	arena_destroy(arena);
-	return EXIT_SUCCESS;
+	return ec.error_head ? EXIT_FAILURE : EXIT_SUCCESS;
 }
