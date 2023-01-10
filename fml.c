@@ -1,5 +1,5 @@
-#define _GNU_SOURCE
 #include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -371,7 +371,7 @@ lex_next(Lexer *lexer, Token *token)
 {
 	LexState state = LS_START;
 	TokenKind tok = TK_ERROR;
-	ssize_t end_offset = 0;
+	int end_offset = 0;
 	const u8 *start = lexer->pos;
 	size_t length;
 	while (lexer->pos != lexer->end) {
@@ -2082,7 +2082,6 @@ typedef enum {
 	OP_SET_GLOBAL = 0x0B,
 	OP_GET_FIELD = 0x05,
 	OP_SET_FIELD = 0x06,
-	OP_LABEL = 0x00,
 	OP_JUMP = 0x0E,
 	OP_BRANCH = 0x0D,
 	OP_CALL_FUNCTION = 0x08,
@@ -2191,7 +2190,6 @@ read_program(ErrorContext *ec, Program *program, u8 *input, size_t input_len)
 typedef struct {
 	ErrorContext *ec;
 	Program *program;
-	Table label_offsets;
 	Value global;
 	Value *stack;
 	size_t stack_pos;
@@ -2356,26 +2354,16 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			vm->stack[++vm->stack_pos] = value;
 			break;
 		}
-		case OP_LABEL: {
-			read_u16(&ip);
-			break;
-		}
 		case OP_JUMP: {
-			Identifier name = constant_string(vm, &ip);
-			Value *offset_value = table_get(&vm->label_offsets, name);
-			assert(offset_value);
-			int32_t offset = value_as_integer(*offset_value);
-			ip = method->instruction_start + offset;
+			i16 offset = read_u16(&ip);
+			ip += offset;
 			break;
 		}
 		case OP_BRANCH: {
-			Identifier name = constant_string(vm, &ip);
+			i16 offset = read_u16(&ip);
 			Value condition = vm->stack[vm->stack_pos--];
 			if (value_to_bool(condition)) {
-				Value *offset_value = table_get(&vm->label_offsets, name);
-				assert(offset_value);
-				int32_t offset = value_as_integer(*offset_value);
-				ip = method->instruction_start + offset;
+				ip += offset;
 			}
 			break;
 		}
@@ -2432,53 +2420,9 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 static void
 vm_run(ErrorContext *ec, Program *program)
 {
-	Table label_offsets;
-	table_init(&label_offsets, 0);
-	for (size_t i = 0; i < program->constant_cnt; i++) {
-		if (program->constants[i].kind == CK_METHOD) {
-			CMethod *method = &program->constants[i].method;
-			u8 *start = method->instruction_start;
-			u8 *end = start + method->instruction_len;
-			u8 *ip = start;
-			while (ip != end) {
-				switch (*ip++) {
-				case OP_LITERAL: ip += 2; break;
-				case OP_ARRAY: break;
-				case OP_OBJECT: ip += 2; break;
-				case OP_FUNCTION: ip += 2; break;
-				case OP_GET_LOCAL: ip += 2; break;
-				case OP_SET_LOCAL: ip += 2; break;
-				case OP_GET_GLOBAL: ip += 2; break;
-				case OP_SET_GLOBAL: ip += 2; break;
-				case OP_GET_FIELD: ip += 2; break;
-				case OP_SET_FIELD: ip += 2; break;
-				case OP_LABEL: {
-					size_t offset = ip - 1 - start;
-					u16 label_index = read_u16(&ip);
-					Constant *label_const = &program->constants[label_index];
-					assert(label_const->kind == CK_STRING);
-					Identifier label = label_const->string;
-					if (!table_insert(&label_offsets, label, make_integer(offset))) {
-						error(ec, NULL, "bytecode", true, "Duplicate label %.*s", (int) label.len, label.name);
-					}
-					break;
-				}
-				case OP_JUMP: ip += 2; break;
-				case OP_BRANCH: ip += 2; break;
-				case OP_CALL_FUNCTION: ip += 1; break;
-				case OP_CALL_METHOD: ip += 3; break;
-				case OP_PRINT: ip += 3; break;
-				case OP_DROP: break;
-				case OP_RETURN: break;
-				default: assert(false);
-				}
-			}
-		}
-	}
 	VM vm = {
 		.ec = ec,
 		.program = program,
-		.label_offsets = label_offsets,
 		.global = make_null(),
 		.stack = calloc(1024, sizeof(Value)),
 		.stack_pos = -1,
@@ -2490,7 +2434,6 @@ vm_run(ErrorContext *ec, Program *program)
 	};
 	vm.global = vm_instantiate_class(&vm, &program->global_class, make_null_vm);
 	vm_call_method(&vm, program->entry_point, 0);
-	table_destroy(&label_offsets);
 	// Check that the program left exactly one value on the stack
 	assert(vm.stack_pos == 0);
 }
@@ -2505,7 +2448,6 @@ typedef struct {
 	bool in_block;
 	Environment *env;
 	u16 local_cnt;
-	size_t label_cnt;
 } CompilerState;
 
 static size_t
@@ -2596,13 +2538,34 @@ op_string_cnt(CompilerState *cs, OpCode op, Identifier string, u8 count)
 	inst_write_u8(cs, count);
 }
 
-static u16
-label_reserve(CompilerState *cs)
+static void
+jump(CompilerState *cs, OpCode op, size_t *pos)
 {
-	Identifier label;
-	label.len = asprintf((void*) &label.name, "L%zu", cs->label_cnt);
-	cs->label_cnt += 1;
-	return add_string(cs, label);
+	inst_write_u8(cs, op);
+	*pos = inst_pos(cs);
+	inst_write_u16(cs, 0x0000);
+}
+
+static void
+jump_fixup(CompilerState *cs, size_t pos, size_t target)
+{
+	int diff = target - (pos + 2);
+	assert(diff <= INT16_MAX && diff >= INT16_MIN);
+	if (diff > INT16_MAX || diff < INT16_MIN) {
+		error(cs->ec, NULL, "compile", true, "Jump offset too large (%d, allowed %d to %d)", diff, INT16_MIN, INT16_MAX);
+	}
+	u16 offset = (i16) diff;
+	u8 *dest = garena_mem(&cs->instructions);
+	dest[pos + 0] = offset >> 0;
+	dest[pos + 1] = offset >> 8;
+}
+
+static void
+jump_to(CompilerState *cs, OpCode op, size_t target)
+{
+	size_t pos;
+	jump(cs, op, &pos);
+	jump_fixup(cs, pos, target);
 }
 
 static void
@@ -2658,17 +2621,16 @@ compile(CompilerState *cs, Ast *ast)
 		op(cs, OP_ARRAY);
 		op_index(cs, OP_SET_LOCAL, array_var);
 
-		u16 cond_label = label_reserve(cs);
-		u16 init_label = label_reserve(cs);
-		u16 after_label = label_reserve(cs);
+		size_t condition_to_init;
+		size_t condition_to_after;
 
-		op_index(cs, OP_LABEL, cond_label);
+		size_t condition = inst_pos(cs);
 		op_index(cs, OP_GET_LOCAL, i_var);
 		op_index(cs, OP_GET_LOCAL, size_var);
 		op_string_cnt(cs, OP_CALL_METHOD, LESS, 2);
-		op_index(cs, OP_BRANCH, init_label);
-		op_index(cs, OP_JUMP, after_label);
-		op_index(cs, OP_LABEL, init_label);
+		jump(cs, OP_BRANCH, &condition_to_init);
+		jump(cs, OP_JUMP, &condition_to_after);
+		size_t init = inst_pos(cs);
 		op_index(cs, OP_GET_LOCAL, i_var);
 		compile(cs, array->initializer);
 		op_string_cnt(cs, OP_CALL_METHOD, SET, 3);
@@ -2679,8 +2641,10 @@ compile(CompilerState *cs, Ast *ast)
 		op_index(cs, OP_SET_LOCAL, i_var);
 		op(cs, OP_DROP);
 		op_index(cs, OP_GET_LOCAL, array_var);
-		op_index(cs, OP_JUMP, cond_label);
-		op_index(cs, OP_LABEL, after_label);
+		jump_to(cs, OP_JUMP, condition);
+
+		jump_fixup(cs, condition_to_init, init);
+		jump_fixup(cs, condition_to_after, inst_pos(cs));
 		return;
 	}
 	case AST_OBJECT: {
@@ -2849,37 +2813,42 @@ compile(CompilerState *cs, Ast *ast)
 
 	case AST_IF: {
 		AstConditional *conditional = &ast->conditional;
-		u16 consequent_label = label_reserve(cs);
-		u16 alternative_label = label_reserve(cs);
-		u16 after_label = label_reserve(cs);
+		size_t cond_to_consequent;
+		size_t cond_to_alternative;
+		size_t consequent_to_after;
+
 		compile(cs, conditional->condition);
-		op_index(cs, OP_BRANCH, consequent_label);
-		op_index(cs, OP_JUMP, alternative_label);
-		op_index(cs, OP_LABEL, consequent_label);
+		jump(cs, OP_BRANCH, &cond_to_consequent);
+		jump(cs, OP_JUMP, &cond_to_alternative);
+		size_t consequent = inst_pos(cs);
 		compile(cs, conditional->consequent);
-		op_index(cs, OP_JUMP, after_label);
-		op_index(cs, OP_LABEL, alternative_label);
+		jump(cs, OP_JUMP, &consequent_to_after);
+		size_t alternative = inst_pos(cs);
 		compile(cs, conditional->alternative);
-		op_index(cs, OP_LABEL, after_label);
+
+		jump_fixup(cs, cond_to_consequent, consequent);
+		jump_fixup(cs, cond_to_alternative, alternative);
+		jump_fixup(cs, consequent_to_after, inst_pos(cs));
 		return;
 	}
 	case AST_WHILE: {
 		AstLoop *loop = &ast->loop;
-		u16 condition_label = label_reserve(cs);
-		u16 body_label = label_reserve(cs);
-		u16 after_label = label_reserve(cs);
+		size_t condition_to_body;
+		size_t condition_to_after;
 
 		literal(cs, (Constant) { .kind = CK_NULL });
-		op_index(cs, OP_LABEL, condition_label);
+		size_t condition = inst_pos(cs);
 		compile(cs, loop->condition);
-		op_index(cs, OP_BRANCH, body_label);
-		op_index(cs, OP_JUMP, after_label);
-		op_index(cs, OP_LABEL, body_label);
+		jump(cs, OP_BRANCH, &condition_to_body);
+		jump(cs, OP_JUMP, &condition_to_after);
+		size_t body = inst_pos(cs);
 		// Drop value from previous iteration (or the initial null)
 		op(cs, OP_DROP);
 		compile(cs, loop->body);
-		op_index(cs, OP_JUMP, condition_label);
-		op_index(cs, OP_LABEL, after_label);
+		jump_to(cs, OP_JUMP, condition);
+
+		jump_fixup(cs, condition_to_body, body);
+		jump_fixup(cs, condition_to_after, inst_pos(cs));
 		return;
 	}
 	case AST_PRINT: {
