@@ -158,8 +158,6 @@ typedef struct {
 	jmp_buf loc;
 } ErrorContext;
 
-ErrorContext ec = { 0 };
-
 static void
 verror(ErrorContext *ec, const u8 *pos, char *kind, bool fatal, const char *fmt, va_list ap)
 {
@@ -676,7 +674,7 @@ peek(const Parser *parser)
 }
 
 static Token
-peek_tok(Parser *parser)
+prev_tok(Parser *parser)
 {
 	return parser->lookahead;
 }
@@ -829,9 +827,6 @@ primary(Parser *parser)
 		}
 		ast->integer.value = negative ? -value : value;
 		break;
-	case TK_IDENTIFIER:
-		ast->kind = AST_VARIABLE_ACCESS;
-		break;
 	case TK_NULL:
 		ast->kind = AST_NULL;
 		break;
@@ -895,6 +890,7 @@ object(Parser *parser)
 {
 	AstObject *object = ast_create(parser->arena, AST_OBJECT);
 	eat(parser, TK_OBJECT);
+	Token object_tok = prev_tok(parser);
 	if (try_eat(parser, TK_EXTENDS)) {
 		object->extends = expression(parser);
 	} else {
@@ -902,6 +898,12 @@ object(Parser *parser)
 	}
 	eat(parser, TK_BEGIN);
 	expression_list(parser, &object->members, &object->member_cnt, TK_SEMICOLON, TK_END);
+	for (size_t i = 0; i < object->member_cnt; i++) {
+		AstKind kind = object->members[i]->kind;
+		if (kind != AST_VARIABLE && kind != AST_FUNCTION) {
+			parser_error(parser, object_tok, "Found object member that is not neither a variable nor a function");
+		}
+	}
 	return (Ast *) object;
 }
 
@@ -938,8 +940,8 @@ print(Parser *parser)
 	AstPrint *print = ast_create(parser->arena, AST_PRINT);
 	eat(parser, TK_PRINT);
 	eat(parser, TK_LPAREN);
-	Token fmt_tok = peek_tok(parser);
 	eat_string(parser, &print->format);
+	Token fmt_tok = prev_tok(parser);
 	size_t formats = 0;
 	for (size_t i = 0; i < print->format.len; i++) {
 		switch (print->format.name[i]) {
@@ -1096,6 +1098,7 @@ assign(Parser *parser, Ast *left, int rbp)
 	}
 	default:
 		parser_error(parser, parser->prev, "Invalid assignment left hand side, expected variable, index or field access");
+		return left;
 	}
 }
 
@@ -1187,7 +1190,7 @@ typedef struct {
 		GcValue *gcvalue;
 
 		// For AST interpreter.
-		Ast *function;
+		AstFunction *function;
 		// For BC interpreter.
 		u16 function_index;
 
@@ -1223,6 +1226,15 @@ typedef struct {
 	GcValue gcvalue;
 	Ast *ast;
 } Function;
+
+static void
+exec_error(ErrorContext *ec, const char *msg, ...)
+{
+	va_list ap;
+	va_start(ap, msg);
+	verror(ec, NULL, "execution", true, msg, ap);
+	va_end(ap);
+}
 
 Value
 make_null(void)
@@ -1265,9 +1277,9 @@ make_object(size_t field_cnt)
 }
 
 Value
-make_function_ast(Ast *ast)
+make_function_ast(AstFunction *function)
 {
-	return (Value) { .kind = VK_FUNCTION, .function = ast };
+	return (Value) { .kind = VK_FUNCTION, .function = function };
 }
 
 Value
@@ -1342,15 +1354,17 @@ value_is_function(Value value)
 	return value.kind == VK_FUNCTION;
 }
 
-Ast *
+AstFunction *
 value_as_function_ast(Value value)
 {
+	assert(value.kind == VK_FUNCTION);
 	return value.function;
 }
 
 u16
 value_as_function_bc(Value value)
 {
+	assert(value.kind == VK_FUNCTION);
 	return (u16) value.function_index;
 }
 
@@ -1438,7 +1452,7 @@ value_print(Value value)
 }
 
 static void
-builtin_print(Identifier format, Value *arguments, size_t argument_cnt)
+builtin_print(ErrorContext *ec, Identifier format, Value *arguments, size_t argument_cnt)
 {
 	bool in_escape = false;
 	size_t arg_index = 0;
@@ -1453,13 +1467,17 @@ builtin_print(Identifier format, Value *arguments, size_t argument_cnt)
 			case  '~': c =  '~'; break;
 			case  '"': c =  '"'; break;
 			case '\\': c = '\\'; break;
-			default: UNREACHABLE();
+			default:
+				exec_error(ec, "Invalid escape sequence: '\\%c'", c);
 			}
 			putchar(c);
 		} else {
 			switch (c) {
 			case '\\': in_escape = true; break;
 			case '~':
+				if (arg_index >= argument_cnt) {
+					exec_error(ec, "More format string placeholders (%zu+) than arguments (%zu)", arg_index + 1, argument_cnt);
+				}
 				value_print(arguments[arg_index]);
 				arg_index += 1;
 				break;
@@ -1481,51 +1499,31 @@ value_to_bool(Value value)
 }
 
 size_t
-value_as_index(Value value)
+value_as_index(ErrorContext *ec, Value value)
 {
 	if (!value_is_integer(value)) {
-		assert(false);
+		exec_error(ec, "Index is not an integer");
 	}
 	i32 int_index = value_as_integer(value);
 	if (int_index < 0) {
-		assert(false);
+		exec_error(ec, "Index is negataive");
 	}
 	return (size_t) int_index;
 }
 
 Value *
-array_index(Value array_value, Value index_value)
+array_index(ErrorContext *ec, Value array_value, Value index_value)
 {
-	assert(value_is_array(array_value));
 	Array *array = value_as_array(array_value);
-	size_t index = value_as_index(index_value);
+	size_t index = value_as_index(ec, index_value);
 	return &array->values[index];
 }
 
 Value *
-value_field(Value value, Identifier name)
+value_field_try(Value value, Value *receiver, Identifier name)
 {
 	if (!value_is_object(value)) {
-		return NULL;
-	}
-	Object *object = value_as_object(value);
-	for (size_t i = 0; i < object->field_cnt; i++) {
-		Identifier field_name = object->fields[i].name;
-		if (value_is_function(object->fields[i].value)) {
-			continue;
-		}
-		if (ident_eq(field_name, name)) {
-			return &object->fields[i].value;
-		}
-	}
-	return value_field(object->parent, name);
-}
-
-Value *
-value_method(Value value, Value *receiver, Identifier name)
-{
-	if (!value_is_object(value)) {
-		// We did not find the method, but we have the eldest parent
+		// We did not find the field, but we have the eldest parent
 		// object on which we can call a primitive method (hopefully)
 		*receiver = value;
 		return NULL;
@@ -1533,21 +1531,39 @@ value_method(Value value, Value *receiver, Identifier name)
 	Object *object = value_as_object(value);
 	for (size_t i = 0; i < object->field_cnt; i++) {
 		Identifier field_name = object->fields[i].name;
-		if (!value_is_function(object->fields[i].value)) {
-			continue;
-		}
 		if (ident_eq(field_name, name)) {
-			// We found the method, set the receiver Object to the
-			// method's owner
+			// We found the field, set the receiver Object to the
+			// field's owner
 			receiver->gcvalue = &object->gcvalue;
 			return &object->fields[i].value;
 		}
 	}
-	return value_method(object->parent, receiver, name);
+	return value_field_try(object->parent, receiver, name);
 }
 
+Value *
+value_field(ErrorContext *ec, Value value, Value *receiver, Identifier name)
+{
+	Value *field = value_field_try(value, receiver, name);
+	if (!field || value_is_function(*field)) {
+		exec_error(ec, "failed to find field %.*s in object", (int)name.len, name.name);
+	}
+	return field;
+}
+
+Value *
+value_method_try(Value value, Value *receiver, Identifier name)
+{
+	Value *field = value_field_try(value, receiver, name);
+	if (!field || !value_is_function(*field)) {
+		return NULL;
+	}
+	return field;
+}
+
+
 Value
-value_call_primitive_method(Value target, Identifier method, Value *arguments, size_t argument_cnt)
+value_call_primitive_method(ErrorContext *ec, Value target, Identifier method, Value *arguments, size_t argument_cnt)
 {
 	const u8 *method_name = method.name;
 	size_t method_name_len = method.len;
@@ -1600,12 +1616,12 @@ value_call_primitive_method(Value target, Identifier method, Value *arguments, s
 		case GK_ARRAY:
 			METHOD("get") {
 				if (argument_cnt != 1) goto err;
-				Value *lvalue = array_index(target, arguments[0]);
+				Value *lvalue = array_index(ec, target, arguments[0]);
 				return *lvalue;
 			}
 			METHOD("set") {
 				if (argument_cnt != 2) goto err;
-				Value *lvalue = array_index(target, arguments[0]);
+				Value *lvalue = array_index(ec, target, arguments[0]);
 				return *lvalue = arguments[1];
 			}
 		case GK_OBJECT:
@@ -1615,8 +1631,8 @@ value_call_primitive_method(Value target, Identifier method, Value *arguments, s
 		break;
 	}
 err:
-	// invalid method M called on object X
-	assert(false);
+	exec_error(ec, "Invalid method '%.*s' called on value (invalid types or number of arguments)", method_name_len, method_name);
+	return make_null();
 }
 
 // A simple hash table.
@@ -1725,6 +1741,7 @@ struct Environment {
 };
 
 typedef struct {
+	ErrorContext *ec;
 	Environment *env;
 	Environment *global_env;
 } InterpreterState;
@@ -1781,7 +1798,7 @@ env_lookup(InterpreterState *is, Identifier name)
 	return lvalue;
 }
 
-Ast *
+AstFunction *
 env_lookup_func(Environment *env, Identifier name)
 {
 	Value *lvalue = env_lookup_raw(env, name);
@@ -1809,7 +1826,7 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 	case AST_ARRAY: {
 		Value size_value = interpret(is, ast->array.size);
-		size_t size = value_as_index(size_value);
+		size_t size = value_as_index(is->ec, size_value);
 		Value array_value = make_array(size);
 		Array *array = value_as_array(array_value);
 		Environment *saved_env = is->env;
@@ -1836,13 +1853,13 @@ interpret(InterpreterState *is, Ast *ast)
 				object->fields[i].value = make_function_ast(ast_member);
 				break;
 			default:
-				assert(false);
+				UNREACHABLE();
 			}
 		}
 		return object_value;
 	}
 	case AST_FUNCTION: {
-		Value function = make_function_ast(ast);
+		Value function = make_function_ast(&ast->function);
 		env_define(is->env, ast->function.name, function);
 		return make_null();
 	}
@@ -1875,13 +1892,13 @@ interpret(InterpreterState *is, Ast *ast)
 
 	case AST_FIELD_ACCESS: {
 		Value object = interpret(is, ast->field_access.object);
-		Value *lvalue = value_field(object, ast->field_access.field);
+		Value *lvalue = value_field(is->ec, object, &object, ast->field_access.field);
 		return *lvalue;
 	}
 	case AST_FIELD_ASSIGNMENT: {
 		Value object = interpret(is, ast->field_assignment.object);
 		Value value = interpret(is, ast->field_assignment.value);
-		Value *lvalue = value_field(object, ast->field_access.field);
+		Value *lvalue = value_field(is->ec, object, &object, ast->field_access.field);
 		return *lvalue = value;
 	}
 
@@ -1914,7 +1931,7 @@ interpret(InterpreterState *is, Ast *ast)
 		for (size_t i = 0; i < ast->print.argument_cnt; i++) {
 			arguments[i] = interpret(is, ast->print.arguments[i]);
 		}
-		builtin_print(ast->print.format, arguments, ast->print.argument_cnt);
+		builtin_print(is->ec, ast->print.format, arguments, ast->print.argument_cnt);
 		free(arguments);
 		return make_null();
 	}
@@ -1959,42 +1976,45 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 		arguments[i] = interpret(is, ast_arguments[i]);
 	}
 
-	Ast *function;
+	AstFunction *function = NULL;
 	if (function_call) {
 		// TODO: lookup functions in global_env if this is problematic
 		function = env_lookup_func(is->env, method);
 	} else {
-		Value *function_value = value_method(object, &object, method);
+		Value *function_value = value_method_try(object, &object, method);
 		function = function_value ? value_as_function_ast(*function_value) : NULL;
 	}
 	if (function) {
-		assert(argument_cnt == function->function.parameter_cnt);
+		if (argument_cnt != function->parameter_cnt) {
+			exec_error(is->ec, "Wrong number of arguments: %zu expected, got %zu", function->parameter_cnt, argument_cnt);
+		}
 
 		// Starting with _only_ the global environment, add the function
 		// arguments to the scope
 		Environment *saved_env = is->env;
 		is->env = env_create(is->global_env);
 		for (size_t i = 0; i < argument_cnt; i++) {
-			env_define(is->env, function->function.parameters[i], arguments[i]);
+			env_define(is->env, function->parameters[i], arguments[i]);
 		}
 		if (!function_call) {
 			env_define(is->env, THIS, object);
 		}
-		return_value = interpret(is, function->function.body);
+		return_value = interpret(is, function->body);
 		env_destroy(is->env);
 		is->env = saved_env;
 	} else {
-		return_value = value_call_primitive_method(object, method, &arguments[0], argument_cnt);
+		return_value = value_call_primitive_method(is->ec, object, method, &arguments[0], argument_cnt);
 	}
 	free(arguments);
 	return return_value;
 }
 
 void
-interpret_ast(Ast *ast)
+interpret_ast(ErrorContext *ec, Ast *ast)
 {
 	Environment *env = env_create(NULL);
 	InterpreterState is = {
+		.ec = ec,
 		.env = env,
 		.global_env = env,
 	};
@@ -2105,7 +2125,7 @@ read_class(u8 **input, Class *class)
 }
 
 static void
-read_constant(u8 **input, Constant *constant)
+read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 {
 	ConstantKind kind = read_u8(input);
 	constant->kind = kind;
@@ -2114,7 +2134,9 @@ read_constant(u8 **input, Constant *constant)
 		break;
 	case CK_BOOLEAN: {
 		u8 b = read_u8(input);
-		assert(b <= 1);
+		if (b > 1) {
+			error(ec, NULL, "bytecode", true, "Boolean is %d not 0 or 1", (int) b);
+		}
 		constant->boolean = b == 1;
 		break;
 	}
@@ -2164,18 +2186,18 @@ read_constant(u8 **input, Constant *constant)
 		break;
 	}
 	default:
-		assert(false);
+		error(ec, NULL, "bytecode", true, "Invalid constant tag '%d'", (int) kind);
 	}
 }
 
 static bool
-read_program(Program *program, u8 *input, size_t input_len)
+read_program(ErrorContext *ec, Program *program, u8 *input, size_t input_len)
 {
 	assert(input_len >= 2);
 	program->constant_cnt = read_u16(&input);
 	program->constants = calloc(program->constant_cnt, sizeof(*program->constants));
 	for (size_t i = 0; i < program->constant_cnt; i++) {
-		read_constant(&input, &program->constants[i]);
+		read_constant(ec, &input, &program->constants[i]);
 	}
 	read_class(&input, &program->global_class);
 	program->entry_point = read_u16(&input);
@@ -2183,6 +2205,7 @@ read_program(Program *program, u8 *input, size_t input_len)
 }
 
 typedef struct {
+	ErrorContext *ec;
 	Program *program;
 	Table label_offsets;
 	Value global;
@@ -2210,7 +2233,7 @@ vm_pop_value(VM *vm)
 }
 
 static Identifier
-constant_string(VM * vm, u8 **ip)
+constant_string(VM *vm, u8 **ip)
 {
 	u16 constant_index = read_u16(ip);
 	Constant *constant = &vm->program->constants[constant_index];
@@ -2303,7 +2326,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		case OP_ARRAY: {
 			Value initializer = vm->stack[vm->stack_pos--];
 			Value size_value = vm->stack[vm->stack_pos--];
-			size_t size = value_as_index(size_value);
+			size_t size = value_as_index(vm->ec, size_value);
 			Value array_value = make_array(size);
 			Array *array = value_as_array(array_value);
 			for (size_t i = 0; i < size; i++) {
@@ -2332,23 +2355,20 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		}
 		case OP_GET_GLOBAL: {
 			Identifier name = constant_string(vm, &ip);
-			Value *lvalue = value_field(vm->global, name);
-			assert(lvalue);
+			Value *lvalue = value_field(vm->ec, vm->global, &vm->global, name);
 			vm->stack[++vm->stack_pos] = *lvalue;
 			break;
 		}
 		case OP_SET_GLOBAL: {
 			Identifier name = constant_string(vm, &ip);
-			Value *lvalue = value_field(vm->global, name);
-			assert(lvalue);
+			Value *lvalue = value_field(vm->ec, vm->global, &vm->global, name);
 			*lvalue = vm->stack[vm->stack_pos];
 			break;
 		}
 		case OP_GET_FIELD: {
 			Identifier name = constant_string(vm, &ip);
 			Value object = vm->stack[vm->stack_pos--];
-			Value *lvalue = value_field(object, name);
-			assert(lvalue);
+			Value *lvalue = value_field(vm->ec, object, &object, name);
 			vm->stack[++vm->stack_pos] = *lvalue;
 			break;
 		}
@@ -2356,8 +2376,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Identifier name = constant_string(vm, &ip);
 			Value value = vm->stack[vm->stack_pos--];
 			Value object = vm->stack[vm->stack_pos--];
-			Value *lvalue = value_field(object, name);
-			assert(lvalue);
+			Value *lvalue = value_field(vm->ec, object, &object, name);
 			*lvalue = value;
 			vm->stack[++vm->stack_pos] = value;
 			break;
@@ -2389,8 +2408,10 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Identifier name = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
 			Value object = vm->global;
-			Value *method_value = value_method(object, &object, name);
-			assert(method_value);
+			Value *method_value = value_method_try(object, &object, name);
+			if (!method_value) {
+				exec_error(vm->ec, "failed to find function '%.*s'", (int) name.len, name.name);
+			}
 			u16 method_index = value_as_function_bc(*method_value);
 			vm_call_method(vm, method_index, argument_cnt);
 			break;
@@ -2399,13 +2420,13 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Identifier name = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
 			Value *lobject = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
-			Value *method_value = value_method(*lobject, lobject, name);
+			Value *method_value = value_method_try(*lobject, lobject, name);
 			if (method_value) {
 				u16 method_index = value_as_function_bc(*method_value);
 				vm_call_method(vm, method_index, argument_cnt);
 			} else {
 				Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 2)];
-				Value return_value = value_call_primitive_method(*lobject, name, arguments, argument_cnt - 1);
+				Value return_value = value_call_primitive_method(vm->ec, *lobject, name, arguments, argument_cnt - 1);
 				vm->stack_pos -= argument_cnt;
 				vm->stack[++vm->stack_pos] = return_value;
 			}
@@ -2415,7 +2436,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Identifier format_string = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
 			Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
-			builtin_print(format_string, arguments, argument_cnt);
+			builtin_print(vm->ec, format_string, arguments, argument_cnt);
 			vm->stack_pos -= argument_cnt;
 			vm->stack[++vm->stack_pos] = make_null();
 			break;
@@ -2435,7 +2456,7 @@ end:
 }
 
 static void
-vm_run(Program *program)
+vm_run(ErrorContext *ec, Program *program)
 {
 	Table label_offsets;
 	table_init(&label_offsets, 0);
@@ -2462,7 +2483,9 @@ vm_run(Program *program)
 					Constant *label_const = &program->constants[label_index];
 					assert(label_const->kind == CK_STRING);
 					Identifier label = label_const->string;
-					assert(table_insert(&label_offsets, label, make_integer(offset)));
+					if (!table_insert(&label_offsets, label, make_integer(offset))) {
+						error(ec, NULL, "bytecode", true, "Duplicate label %.*s", (int) label.len, label.name);
+					}
 					break;
 				}
 				case OP_JUMP: ip += 2; break;
@@ -2475,10 +2498,10 @@ vm_run(Program *program)
 				default: assert(false);
 				}
 			}
-
 		}
 	}
 	VM vm = {
+		.ec = ec,
 		.program = program,
 		.label_offsets = label_offsets,
 		.global = make_null(),
@@ -2711,9 +2734,8 @@ compile(CompilerState *cs, Ast *ast)
 			case AST_VARIABLE:
 			case AST_FUNCTION:
 				compile(cs, ast_member);
-			break;
-			default:
-				assert(false);
+				break;
+			default: UNREACHABLE();
 			}
 		}
 		op(cs, OP_OBJECT);
@@ -3039,7 +3061,6 @@ write_class(FILE *f, Class *class)
 	}
 }
 
-
 static void
 write_constant(FILE *f, Constant *constant)
 {
@@ -3097,7 +3118,7 @@ write_constant(FILE *f, Constant *constant)
 		break;
 	}
 	default:
-		assert(false);
+		UNREACHABLE();
 	}
 }
 
@@ -3118,7 +3139,6 @@ main(int argc, char **argv) {
 	Arena arena_;
 	Arena *arena = &arena_;
 	arena_init(arena);
-	ec.arena = arena;
 	if(argc != 3) {
 		return 1;
 	}
@@ -3130,6 +3150,10 @@ main(int argc, char **argv) {
 	fread(buf, fsize, 1, f);
 	fclose(f);
 
+	ErrorContext ec = {
+		.arena = arena,
+	};
+
 	if (setjmp(ec.loc) != 0) {
 		goto end;
 	}
@@ -3137,17 +3161,17 @@ main(int argc, char **argv) {
 	if (strcmp(argv[1], "run_ast") == 0) {
 		Ast *ast = parse(&ec, arena, buf, fsize);
 		assert(ast);
-		interpret_ast(ast);
+		interpret_ast(&ec, ast);
 	} else if (strcmp(argv[1], "run") == 0) {
 		Ast *ast = parse(&ec, arena, buf, fsize);
 		assert(ast);
 		Program program;
 		compile_ast(&program, ast);
-		vm_run(&program);
+		vm_run(&ec, &program);
 	} else if (strcmp(argv[1], "execute") == 0) {
 		Program program;
-		read_program(&program, buf, fsize);
-		vm_run(&program);
+		read_program(&ec, &program, buf, fsize);
+		vm_run(&ec, &program);
 	} else if (strcmp(argv[1], "compile") == 0) {
 		Ast *ast = parse(&ec, arena, buf, fsize);
 		assert(ast);
@@ -3171,12 +3195,16 @@ main(int argc, char **argv) {
 		fread(buf, fsize, 1, f);
 		fclose(f);
 		Program program2;
-		read_program(&program2, buf, fsize);
-		vm_run(&program2);
+		read_program(&ec, &program2, buf, fsize);
+		vm_run(&ec, &program2);
 	}
 
 end:
 	for (Error *err = ec.error_head; err; err = err->next) {
+		if (!err->pos) {
+			fprintf(stderr, "%s error: %s\n", err->kind, err->msg);
+			continue;
+		}
 		const u8 *line_start = ec.source;
 		size_t line = 0;
 		const u8 *pos = ec.source;
