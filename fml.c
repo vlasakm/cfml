@@ -858,6 +858,10 @@ block(Parser *parser)
 	AstBlock *block = ast_create(parser->arena, AST_BLOCK);
 	eat(parser, TK_BEGIN);
 	expression_list(parser, &block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_END);
+	// begin end => null
+	if (block->expression_cnt == 0) {
+		block->kind = AST_NULL;
+	}
 	return (Ast *) block;
 }
 
@@ -1161,8 +1165,11 @@ parse(ErrorContext *ec, Arena *arena, u8 *buf, size_t buf_len)
 	Parser parser;
 	parser_init(&parser, ec, arena, buf, buf_len);
 	AstTop *top = ast_create(parser.arena, AST_TOP);
-	// TODO: distinguish at the parser level an empty program (evaluates to null)
 	expression_list(&parser, &top->expressions, &top->expression_cnt, TK_SEMICOLON, TK_EOF);
+	// empty program => null
+	if (top->expression_cnt == 0) {
+		top->kind = AST_NULL;
+	}
 	return (Ast *) top;
 }
 
@@ -1920,11 +1927,10 @@ interpret(InterpreterState *is, Ast *ast)
 		}
 	}
 	case AST_WHILE: {
-		Value value = make_null();
 		while (value_to_bool(interpret(is, ast->loop.condition))) {
-			value = interpret(is, ast->loop.body);
+			interpret(is, ast->loop.body);
 		}
-		return value;
+		return make_null();
 	}
 	case AST_PRINT: {
 		Value *arguments = calloc(ast->print.argument_cnt, sizeof(*arguments));
@@ -1937,10 +1943,6 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 	case AST_BLOCK: {
 		AstBlock *block = &ast->block;
-		if (block->expression_cnt == 0) {
-			return make_null();
-		}
-
 		Environment *saved_env = is->env;
 		is->env = env_create(is->env);
 		Value value = interpret(is, block->expressions[0]);
@@ -1953,9 +1955,6 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 	case AST_TOP: {
 		AstTop *top = &ast->top;
-		if (top->expression_cnt == 0) {
-			return make_null();
-		}
 		Value value = interpret(is, top->expressions[0]);
 		for (size_t i = 1; i < top->expression_cnt; i++) {
 			value = interpret(is, top->expressions[i]);
@@ -2570,7 +2569,7 @@ add_constant(CompilerState *cs, Constant constant)
 	size_t index = cs->constant_cnt++;
 	assert(index <= 0xFFFF);
 	cs->constants[index] = constant;
-	return index & 0xFFFF;
+	return index;
 }
 
 static u16
@@ -2949,10 +2948,6 @@ compile(CompilerState *cs, Ast *ast)
 		cs->in_block = true;
 		cs->env = env_create(cs->env);
 		AstBlock *block = &ast->block;
-		if (block->expression_cnt == 0) {
-			literal(cs, (Constant) { .kind = CK_NULL });
-			return;
-		}
 		compile(cs, block->expressions[0]);
 		for (size_t i = 1; i < block->expression_cnt; i++) {
 			op(cs, OP_DROP);
@@ -2965,16 +2960,13 @@ compile(CompilerState *cs, Ast *ast)
 	}
 	case AST_TOP: {
 		AstTop *top = &ast->top;
-		if (top->expression_cnt == 0) {
-			literal(cs, (Constant) { .kind = CK_NULL });
-			return;
-		}
 		compile(cs, top->expressions[0]);
 		for (size_t i = 1; i < top->expression_cnt; i++) {
 			op(cs, OP_DROP);
 			compile(cs, top->expressions[i]);
 		}
-		op(cs, OP_RETURN);
+		// emit OP_RETURN in outer level (in case there is a AST_NULL
+		// instead of AST_TOP as the top level).
 		return;
 	}
 	}
@@ -3001,6 +2993,7 @@ compile_ast(Program *program, Ast *ast)
 	};
 
 	compile(&cs, ast);
+	op(&cs, OP_RETURN);
 
 	Identifier program_name = {
 		.name = (void*) "program",
