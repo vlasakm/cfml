@@ -2943,11 +2943,11 @@ compile(CompilerState *cs, Ast *ast)
 		return;
 	}
 	case AST_BLOCK: {
+		AstBlock *block = &ast->block;
 		Environment *saved_environment = cs->env;
 		bool saved_in_block = cs->in_block;
 		cs->in_block = true;
 		cs->env = env_create(cs->env);
-		AstBlock *block = &ast->block;
 		compile(cs, block->expressions[0]);
 		for (size_t i = 1; i < block->expression_cnt; i++) {
 			op(cs, OP_DROP);
