@@ -767,9 +767,7 @@ expression_list(Parser *parser, Ast ***list, size_t *n, TokenKind separator, Tok
 			*list = arena_realloc(parser->arena, *list, old_capacity * sizeof((*list)[0]), capacity * sizeof((*list)[0]));
 		}
 
-		Ast *expr;
-		expr = expression(parser);
-		(*list)[*n] = expr;
+		(*list)[*n] = expression(parser);
 		*n += 1;
 
 		if (!try_eat(parser, separator)) {
