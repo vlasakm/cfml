@@ -138,6 +138,7 @@ arena_vaprintf(Arena *arena, const char *fmt, va_list ap)
 		mem = arena_alloc(arena, (size_t) len);
 		len = vsnprintf(mem, (size_t) len, fmt, ap);
 	}
+	va_end(ap_orig);
 	return mem;
 }
 
