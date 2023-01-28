@@ -1506,14 +1506,14 @@ value_to_bool(Value value)
 }
 
 size_t
-value_as_index(ErrorContext *ec, Value value)
+value_as_size(ErrorContext *ec, Value value)
 {
 	if (!value_is_integer(value)) {
-		exec_error(ec, "Index is not an integer");
+		exec_error(ec, "Value is not an integer");
 	}
 	i32 int_index = value_as_integer(value);
 	if (int_index < 0) {
-		exec_error(ec, "Index is negataive");
+		exec_error(ec, "Value is negataive");
 	}
 	return (size_t) int_index;
 }
@@ -1522,7 +1522,10 @@ Value *
 array_index(ErrorContext *ec, Value array_value, Value index_value)
 {
 	Array *array = value_as_array(array_value);
-	size_t index = value_as_index(ec, index_value);
+	size_t index = value_as_size(ec, index_value);
+	if (index >= array->length) {
+		exec_error(ec, "Array indexed out of bounds");
+	}
 	return &array->values[index];
 }
 
@@ -1833,7 +1836,7 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 	case AST_ARRAY: {
 		Value size_value = interpret(is, ast->array.size);
-		size_t size = value_as_index(is->ec, size_value);
+		size_t size = value_as_size(is->ec, size_value);
 		Value array_value = make_array(size);
 		Array *array = value_as_array(array_value);
 		Environment *saved_env = is->env;
@@ -2325,7 +2328,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		case OP_ARRAY: {
 			Value initializer = vm->stack[vm->stack_pos--];
 			Value size_value = vm->stack[vm->stack_pos--];
-			size_t size = value_as_index(vm->ec, size_value);
+			size_t size = value_as_size(vm->ec, size_value);
 			Value array_value = make_array(size);
 			Array *array = value_as_array(array_value);
 			for (size_t i = 0; i < size; i++) {
