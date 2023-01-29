@@ -2599,7 +2599,9 @@ add_constant(CompilerState *cs, Constant constant)
 {
 	size_t index = garena_cnt(&cs->constants, Constant);
 	garena_push_value(&cs->constants, Constant, constant);
-	assert(index <= 0xFFFF);
+	if (index > 0xFFFF) {
+		error(cs->ec, NULL, "compile", true, "Too many constants (only 65536 allowed)");
+	}
 	return index;
 }
 
