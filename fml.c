@@ -84,22 +84,6 @@ arena_alloc(Arena *arena, size_t size)
 	return &arena->current->mem[pos];
 }
 
-void *
-arena_realloc(Arena *arena, void *old, size_t old_size, size_t new_size)
-{
-	size_t diff = new_size - old_size;
-	if (old && &arena->current->mem[arena->current->pos] == (u8 *) old + old_size && arena->current->pos + diff <= arena->current->size) {
-		arena->current->pos += diff;
-		return old;
-	}
-	void *new = arena_alloc(arena, new_size);
-	if (old) {
-		memcpy(new, old, old_size);
-	}
-	return new;
-
-}
-
 size_t
 arena_save(Arena *arena)
 {
@@ -141,6 +125,77 @@ arena_vaprintf(Arena *arena, const char *fmt, va_list ap)
 	va_end(ap_orig);
 	return mem;
 }
+
+typedef struct {
+	u8 *mem;
+	size_t pos;
+	size_t capacity;
+} GArena;
+
+void
+garena_init(GArena *arena)
+{
+	arena->mem = NULL;
+	arena->pos = 0;
+	arena->capacity = 0;
+}
+
+void
+garena_destroy(GArena *arena)
+{
+	free(arena->mem);
+}
+
+void *
+garena_alloc(GArena *arena, size_t size, size_t alignment)
+{
+	if (arena->pos + size > arena->capacity) {
+		arena->capacity = arena->capacity ? arena->capacity * 2 : size * 8;
+		arena->mem = realloc(arena->mem, arena->capacity);
+	}
+	size_t pos = (arena->pos + (alignment - 1)) & ~(alignment - 1);
+	arena->pos = pos + size;
+	return &arena->mem[pos];
+}
+
+size_t
+garena_save(GArena *arena)
+{
+	return arena->pos;
+}
+
+void *
+garena_restore(GArena *arena, size_t pos)
+{
+	arena->pos = pos;
+	return &arena->mem[pos];
+}
+
+void *
+garena_mem(GArena *arena)
+{
+	return arena->mem;
+}
+
+#define garena_cnt(arena, type) (((arena)->pos) / sizeof(type))
+#define garena_cnt_from(arena, type, start) ((((arena)->pos) - (start)) / sizeof(type))
+#define garena_push(arena, type) ((type *)garena_alloc((arena), sizeof(type), alignof(type)))
+#define garena_push_value(arena, type, value) do { type tmp_pushed_ = (value); *garena_push((arena), type) = tmp_pushed_; } while (0)
+
+#define move_to_arena(arena, garena, start, type) move_to_arena_((arena), (garena), (start), alignof(type))
+void *
+move_to_arena_(Arena *arena, GArena *garena, size_t start, size_t align)
+{
+	size_t size = garena->pos - start;
+	if (size == 0) {
+		return NULL;
+	}
+	garena_restore(garena, start);
+	// "alloc 0 bytes" to get the alignment right
+	void *old = garena_alloc(garena, 0, align);
+	return memcpy(arena_alloc(arena, size), old, size);
+}
+
 
 typedef struct Error Error;
 struct Error {
@@ -645,16 +700,18 @@ typedef struct {
 	Token lookahead;
 	Token prev;
 	Arena *arena;
+	GArena *scratch;
 	ErrorContext *ec;
 } Parser;
 
 void
-parser_init(Parser *parser, ErrorContext *ec, Arena *arena, const u8 *buf, size_t buf_len)
+parser_init(Parser *parser, ErrorContext *ec, Arena *arena, GArena *scratch, const u8 *buf, size_t buf_len)
 {
 	ec->source = buf;
 	ec->source_len = buf_len;
 	parser->ec = ec;
 	parser->arena = arena;
+	parser->scratch = scratch;
 	parser->lexer = lex_init(buf, buf_len);
 	lex_next(&parser->lexer, &parser->lookahead);
 }
@@ -753,56 +810,34 @@ expression(Parser *parser)
 	return expression_bp(parser, 0);
 }
 
-static bool
+static void
 expression_list(Parser *parser, Ast ***list, size_t *n, TokenKind separator, TokenKind terminator)
 {
-	size_t capacity = 0;
-	*list = NULL;
-	*n = 0;
-
+	size_t start = garena_save(parser->scratch);
 	while (!try_eat(parser, terminator)) {
-		if (capacity == 0 || *n == capacity) {
-			size_t old_capacity = capacity;
-			capacity = capacity ? capacity * 2 : 4;
-			*list = arena_realloc(parser->arena, *list, old_capacity * sizeof((*list)[0]), capacity * sizeof((*list)[0]));
-		}
-
-		(*list)[*n] = expression(parser);
-		*n += 1;
-
+		garena_push_value(parser->scratch, Ast *, expression(parser));
 		if (!try_eat(parser, separator)) {
 			eat(parser, terminator);
-			return true;
+			break;
 		}
 	}
-
-	return true;
+	*n = garena_cnt_from(parser->scratch, Ast *, start);
+	*list = move_to_arena(parser->arena, parser->scratch, start, Ast *);
 }
 
-static bool
+static void
 identifier_list(Parser *parser, Identifier **list, size_t *n, TokenKind separator, TokenKind terminator)
 {
-	size_t capacity = 0;
-	*list = NULL;
-	*n = 0;
-
+	size_t start = garena_save(parser->scratch);
 	while (!try_eat(parser, terminator)) {
-		if (capacity == 0 || *n == capacity) {
-			size_t old_capacity = capacity;
-			capacity = capacity ? capacity * 2 : 4;
-			*list = arena_realloc(parser->arena, *list, old_capacity * sizeof((*list)[0]), capacity * sizeof((*list)[0]));
-		}
-
-		eat_identifier(parser, &(*list)[*n]);
-		*n += 1;
-
+		eat_identifier(parser, garena_push(parser->scratch, Identifier));
 		if (!try_eat(parser, separator)) {
 			eat(parser, terminator);
-			return true;
+			break;
 		}
 	}
-
-	return true;
+	*n = garena_cnt_from(parser->scratch, Identifier, start);
+	*list = move_to_arena(parser->arena, parser->scratch, start, Identifier);
 }
 
 
@@ -1162,13 +1197,17 @@ Ast *
 parse(ErrorContext *ec, Arena *arena, u8 *buf, size_t buf_len)
 {
 	Parser parser;
-	parser_init(&parser, ec, arena, buf, buf_len);
+	GArena scratch;
+	garena_init(&scratch);
+	parser_init(&parser, ec, arena, &scratch, buf, buf_len);
+	// TODO: setjmp for GArena destruction
 	AstTop *top = ast_create(parser.arena, AST_TOP);
 	expression_list(&parser, &top->expressions, &top->expression_cnt, TK_SEMICOLON, TK_EOF);
 	// empty program => null
 	if (top->expression_cnt == 0) {
 		top->kind = AST_NULL;
 	}
+	garena_destroy(&scratch);
 	return (Ast *) top;
 }
 
@@ -2522,15 +2561,11 @@ vm_run(ErrorContext *ec, Program *program)
 }
 
 typedef struct {
-	Constant *constants;
-	size_t constant_cnt;
-	size_t constant_capacity;
-	u8 *instructions;
-	size_t instruction_cnt;
-	size_t instruction_capacity;
-	u16 *members;
-	size_t member_cnt;
-	size_t member_capacity;
+	ErrorContext *ec;
+	Arena *arena;
+	GArena constants; // Constant array
+	GArena instructions; // u8 array
+	GArena members; // u16 array (but unaligned when serialized)
 	bool in_object;
 	bool in_block;
 	Environment *env;
@@ -2538,39 +2573,33 @@ typedef struct {
 	size_t label_cnt;
 } CompilerState;
 
-static void
-grow(void **array, size_t *cnt, size_t *capacity, size_t new_elems, size_t elem_size)
+static size_t
+inst_pos(CompilerState *cs)
 {
-	if (*cnt + new_elems > *capacity) {
-		size_t new_capacity = *capacity ? *capacity * 2 : 16;
-		*capacity = new_capacity;
-		*array = realloc(*array, new_capacity * elem_size);
-	}
+	return garena_save(&cs->instructions);
 }
 
 static void
 inst_write_u8(CompilerState *cs, u8 b)
 {
-	grow((void*)&cs->instructions, &cs->instruction_cnt, &cs->instruction_capacity, 1, sizeof(*cs->instructions));
-	cs->instructions[cs->instruction_cnt++] = b;
+	u8 *pos = garena_alloc(&cs->instructions, 1, 1);
+	pos[0] = b;
 }
 
 static void
 inst_write_u16(CompilerState *cs, u16 b)
 {
-	grow((void*)&cs->instructions, &cs->instruction_cnt, &cs->instruction_capacity, 2, sizeof(*cs->instructions));
-	cs->instructions[cs->instruction_cnt + 0] = b >> 0;
-	cs->instructions[cs->instruction_cnt + 1] = b >> 8;
-	cs->instruction_cnt += 2;
+	u8 *pos = garena_alloc(&cs->instructions, 2, 1);
+	pos[0] = b >> 0;
+	pos[1] = b >> 8;
 }
 
 static u16
 add_constant(CompilerState *cs, Constant constant)
 {
-	grow((void*)&cs->constants, &cs->constant_cnt, &cs->constant_capacity, 1, sizeof(*cs->constants));
-	size_t index = cs->constant_cnt++;
+	size_t index = garena_cnt(&cs->constants, Constant);
+	garena_push_value(&cs->constants, Constant, constant);
 	assert(index <= 0xFFFF);
-	cs->constants[index] = constant;
 	return index;
 }
 
@@ -2721,12 +2750,7 @@ compile(CompilerState *cs, Ast *ast)
 		AstObject *object = &ast->object;
 		compile(cs, object->extends);
 		bool saved_in_object = cs->in_object;
-		u16 *saved_members = cs->members;
-		size_t saved_members_cnt = cs->member_cnt;
-		size_t saved_members_capacity = cs->member_capacity;
-		cs->members = NULL;
-		cs->member_cnt = 0;
-		cs->member_capacity = 0;
+		size_t start = garena_save(&cs->members);
 
 		cs->in_object = true;
 		for (size_t i = 0; i < object->member_cnt; i++) {
@@ -2740,32 +2764,30 @@ compile(CompilerState *cs, Ast *ast)
 			}
 		}
 		op(cs, OP_OBJECT);
+
+		// NOTE: due to losing alignment when serializing, we refer to
+		// members with `u8` pointers while compiling them as if they
+		// were u16
+		size_t member_cnt = garena_cnt_from(&cs->members, u16, start);
+		u16 *members = move_to_arena(cs->arena, &cs->members, start, u16);
 		inst_constant(cs, (Constant) {
 		       .kind = CK_CLASS,
 		       .class = (Class) {
-				.member_cnt = cs->member_cnt,
-				.members = (u8 *) cs->members,
+				.member_cnt = member_cnt,
+				.members = (u8 *) members,
 			},
 		});
 		cs->in_object = saved_in_object;
-		cs->members = saved_members;
-		cs->member_cnt = saved_members_cnt;
-		cs->member_capacity = saved_members_capacity;
 		return;
 	}
 	case AST_FUNCTION: {
 		AstFunction *function = &ast->function;
 		Environment *saved_environment = cs->env;
 		u16 saved_local_cnt = cs->local_cnt;
-		u8 *saved_instructions = cs->instructions;
-		size_t saved_instruction_cnt = cs->instruction_cnt;
-		size_t saved_instruction_capacity = cs->instruction_capacity;
+		size_t start = garena_save(&cs->instructions);
 		bool saved_in_block = cs->in_block;
 		bool saved_in_object = cs->in_object;
 
-		cs->instructions = NULL;
-		cs->instruction_cnt = 0;
-		cs->instruction_capacity = 0;
 		cs->local_cnt = 0;
 		cs->in_block = false;
 		cs->in_object = false;
@@ -2783,6 +2805,8 @@ compile(CompilerState *cs, Ast *ast)
 		op(cs, OP_RETURN);
 		env_destroy(cs->env);
 
+		size_t instruction_len = garena_cnt_from(&cs->instructions, u8, start);
+		u8 *instruction_start = move_to_arena(cs->arena, &cs->instructions, start, u8);
 		u16 name_constant = add_string(cs, function->name);
 		u16 method = add_constant(cs, (Constant) {
 		       .kind = CK_METHOD,
@@ -2790,16 +2814,12 @@ compile(CompilerState *cs, Ast *ast)
 				.name = name_constant,
 				.local_cnt = cs->local_cnt - (function->parameter_cnt + !!saved_in_object),
 				.parameter_cnt = function->parameter_cnt + !!saved_in_object,
-				.instruction_start = cs->instructions,
-				.instruction_len = cs->instruction_cnt,
+				.instruction_start = instruction_start,
+				.instruction_len = instruction_len,
 			},
 		});
-		grow(&cs->members, &cs->member_cnt, &cs->member_capacity, 1, sizeof(*cs->members));
-		cs->members[cs->member_cnt++] = method;
+		garena_push_value(&cs->members, u16, method);
 		cs->env = saved_environment;
-		cs->instructions = saved_instructions;
-		cs->instruction_cnt = saved_instruction_cnt;
-		cs->instruction_capacity = saved_instruction_capacity;
 		cs->local_cnt = saved_local_cnt;
 		cs->in_block = saved_in_block;
 		cs->in_object = saved_in_object;
@@ -2818,8 +2838,7 @@ compile(CompilerState *cs, Ast *ast)
 			       .kind = CK_SLOT,
 			       .slot = name,
 			});
-			grow((void*)&cs->members, &cs->member_cnt, &cs->member_capacity, 1, sizeof(*cs->members));
-			cs->members[cs->member_cnt++] = slot;
+			garena_push_value(&cs->members, u16, slot);
 			if (!cs->in_object) {
 				op_string(cs, OP_SET_GLOBAL, variable->name);
 			}
@@ -2976,24 +2995,24 @@ compile(CompilerState *cs, Ast *ast)
 }
 
 void
-compile_ast(Program *program, Ast *ast)
+compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 {
 	CompilerState cs = {
-		.constants = NULL,
-		.constant_cnt = 0,
-		.constant_capacity = 0,
-		.instructions = NULL,
-		.instruction_cnt = 0,
-		.instruction_capacity = 0,
-		.members = NULL,
-		.member_cnt = 0,
-		.member_capacity = 0,
+		.ec = ec,
+		.arena = arena,
+		.constants = {0},
+		.instructions = {0},
+		.members = {0},
 		.in_object = false,
 		.in_block = false,
 		.env = NULL,
 		.local_cnt = 0,
 	};
+	garena_init(&cs.constants);
+	garena_init(&cs.instructions);
+	garena_init(&cs.members);
 
+	size_t start = garena_save(&cs.instructions);
 	compile(&cs, ast);
 	op(&cs, OP_RETURN);
 
@@ -3002,25 +3021,35 @@ compile_ast(Program *program, Ast *ast)
 		.len = 7,
 	};
 	u16 name_constant = add_string(&cs, program_name);
+
+	size_t instruction_len = garena_cnt_from(&cs.instructions, u8, start);
+	u8 *instruction_start = move_to_arena(cs.arena, &cs.instructions, start, u8);
 	u16 entry_point = add_constant(&cs, (Constant) {
 	       .kind = CK_METHOD,
 	       .method = (CMethod) {
 			.name = name_constant,
 			.local_cnt = cs.local_cnt,
 			.parameter_cnt = 0,
-			.instruction_start = cs.instructions,
-			.instruction_len = cs.instruction_cnt,
+			.instruction_start = instruction_start,
+			.instruction_len = instruction_len,
 		},
 	});
 
-	program->constants = cs.constants;
-	program->constant_cnt = cs.constant_cnt;
+	program->constant_cnt = garena_cnt(&cs.constants, Constant);
+	program->constants = move_to_arena(cs.arena, &cs.constants, 0, Constant);
+
+	size_t member_cnt = garena_cnt_from(&cs.members, u16, start);
+	u16 *members = move_to_arena(cs.arena, &cs.members, start, u16);
 	program->global_class = (Class) {
-		.members = (u8 *) cs.members,
-		.member_cnt = cs.member_cnt,
-	},
+		.members = (u8 *) members,
+		.member_cnt = member_cnt,
+	};
 
 	program->entry_point = entry_point;
+
+	garena_destroy(&cs.constants);
+	garena_destroy(&cs.instructions);
+	garena_destroy(&cs.members);
 }
 
 static void
@@ -3161,7 +3190,7 @@ main(int argc, char **argv) {
 		Ast *ast = parse(&ec, arena, buf, fsize);
 		assert(ast);
 		Program program;
-		compile_ast(&program, ast);
+		compile_ast(&ec, arena, &program, ast);
 		vm_run(&ec, &program);
 	} else if (strcmp(argv[1], "execute") == 0) {
 		Program program;
@@ -3171,14 +3200,14 @@ main(int argc, char **argv) {
 		Ast *ast = parse(&ec, arena, buf, fsize);
 		assert(ast);
 		Program program;
-		compile_ast(&program, ast);
+		compile_ast(&ec, arena, &program, ast);
 		write_program(&program, stdout);
 		fflush(stdout);
 	} else if (strcmp(argv[1], "serde") == 0) {
 		Ast *ast = parse(&ec, arena, buf, fsize);
 		assert(ast);
 		Program program;
-		compile_ast(&program, ast);
+		compile_ast(&ec, arena, &program, ast);
 		FILE *f = fopen("out.bc", "wb");
 		write_program(&program, f);
 		fclose(f);
