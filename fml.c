@@ -544,94 +544,96 @@ typedef enum {
 	AST_TOP,
 } AstKind;
 
-#define AST_COMMON_FIELDS \
-		AstKind kind;
-		//Ast *next;
-
-typedef union Ast Ast;
+typedef struct {
+	AstKind kind;
+} Ast;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
+} AstNull;
+
+typedef struct {
+	Ast base;
 	bool value;
 } AstBoolean;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	i32 value;
 } AstInteger;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Ast *size;
 	Ast *initializer;
 } AstArray;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Ast *extends;
 	Ast **members;
 	size_t member_cnt;
 } AstObject;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Identifier *parameters;
 	size_t parameter_cnt;
 	Ast *body;
 } AstFunction;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Identifier name;
 	Ast *value;
 } AstDeclaration;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Identifier name;
 } AstVariableAccess;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Identifier name;
 	Ast *value;
 } AstVariableAssignment;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Ast *object;
 	Ast *index;
 } AstIndexAccess;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Ast *object;
 	Ast *index;
 	Ast *value;
 } AstIndexAssignment;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Ast *object;
 	Identifier field;
 } AstFieldAccess;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Ast *object;
 	Identifier field;
 	Ast *value;
 } AstFieldAssignment;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Ast *function;
 	Ast **arguments;
 	size_t argument_cnt;
 } AstFunctionCall;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Ast* object;
 	Identifier name;
 	Ast **arguments;
@@ -639,61 +641,36 @@ typedef struct {
 } AstMethodCall;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Ast *condition;
 	Ast *consequent;
 	Ast *alternative;
 } AstConditional;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Ast *condition;
 	Ast *body;
 } AstLoop;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Identifier format;
 	Ast **arguments;
 	size_t argument_cnt;
 } AstPrint;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Ast **expressions;
 	size_t expression_cnt;
 } AstBlock;
 
 typedef struct {
-	AST_COMMON_FIELDS
+	Ast base;
 	Ast **expressions;
 	size_t expression_cnt;
 } AstTop;
-
-union Ast {
-	struct {
-		AST_COMMON_FIELDS
-	};
-	AstBoolean boolean;
-	AstInteger integer;
-	AstArray array;
-	AstObject object;
-	AstFunction function;
-	AstDeclaration declaration;
-	AstVariableAccess variable_access;
-	AstVariableAssignment variable_assignment;
-	AstIndexAccess index_access;
-	AstIndexAssignment index_assignment;
-	AstFieldAccess field_access;
-	AstFieldAssignment field_assignment;
-	AstFunctionCall function_call;
-	AstMethodCall method_call;
-	AstConditional conditional;
-	AstLoop loop;
-	AstPrint print;
-	AstBlock block;
-	AstTop top;
-};
 
 typedef struct {
 	Lexer lexer;
@@ -786,11 +763,12 @@ try_eat(Parser *parser, TokenKind kind)
 	return false;
 }
 
+#define AST_CREATE(type, var, arena, kind) type *var = ast_create_((arena), (kind), sizeof(type))
 static void *
-ast_create(Arena *arena, AstKind kind)
+ast_create_(Arena *arena, AstKind kind, size_t size)
 {
-	Ast *ast = arena_alloc(arena, sizeof(Ast));
-	memset(ast, 0, sizeof(*ast));
+	Ast *ast = arena_alloc(arena, size);
+	memset(ast, 0, size);
 	ast->kind = kind;
 	return ast;
 }
@@ -798,8 +776,8 @@ ast_create(Arena *arena, AstKind kind)
 static Ast *
 create_null(Parser *parser)
 {
-	Ast *ast = ast_create(parser->arena, AST_NULL);
-	return ast;
+	AST_CREATE(AstNull, ast, parser->arena, AST_NULL);
+	return &ast->base;
 }
 
 static Ast *expression_bp(Parser *parser, int bp);
@@ -844,11 +822,10 @@ identifier_list(Parser *parser, Identifier **list, size_t *n, TokenKind separato
 static Ast *
 primary(Parser *parser)
 {
-	Ast *ast = ast_create(parser->arena, AST_NULL);
 	Token token = discard(parser);
 	switch (token.kind) {
-	case TK_NUMBER:
-		ast->kind = AST_INTEGER;
+	case TK_NUMBER: {
+		AST_CREATE(AstInteger, integer, parser->arena, AST_INTEGER);
 		const u8 *pos = token.pos;
 		bool negative = 0;
 		while (*pos == '-') {
@@ -859,74 +836,77 @@ primary(Parser *parser)
 		for (; pos < token.end; pos++) {
 			value = value * 10 + (*pos - '0');
 		}
-		ast->integer.value = negative ? -value : value;
-		break;
-	case TK_NULL:
-		ast->kind = AST_NULL;
-		break;
-	case TK_TRUE:
-		ast->kind = AST_BOOLEAN;
-		ast->boolean.value = true;
-		break;
-	case TK_FALSE:
-		ast->kind = AST_BOOLEAN;
-		ast->boolean.value = false;
-		break;
+		integer->value = negative ? -value : value;
+		return &integer->base;
+	}
+	case TK_NULL: {
+		AST_CREATE(AstNull, null, parser->arena, AST_NULL);
+		return &null->base;
+	}
+	case TK_TRUE: {
+		AST_CREATE(AstBoolean, boolean, parser->arena, AST_BOOLEAN);
+		boolean->value = true;
+		return &boolean->base;
+	}
+	case TK_FALSE: {
+		AST_CREATE(AstBoolean, boolean, parser->arena, AST_BOOLEAN);
+		boolean->value = false;
+		return &boolean->base;
+	}
 	default:
 		UNREACHABLE();
 	}
-	return ast;
 }
 
 static Ast *
 ident(Parser *parser)
 {
-	AstVariableAccess *variable_access = ast_create(parser->arena, AST_VARIABLE_ACCESS);
+	AST_CREATE(AstVariableAccess, variable_access, parser->arena, AST_VARIABLE_ACCESS);
 	eat_identifier(parser, &variable_access->name);
-	return (Ast *) variable_access;
+	return &variable_access->base;
 }
 
 static Ast *
 block(Parser *parser)
 {
-	AstBlock *block = ast_create(parser->arena, AST_BLOCK);
+	AST_CREATE(AstBlock, block, parser->arena, AST_BLOCK);
 	eat(parser, TK_BEGIN);
 	expression_list(parser, &block->expressions, &block->expression_cnt, TK_SEMICOLON, TK_END);
 	// begin end => null
 	if (block->expression_cnt == 0) {
-		block->kind = AST_NULL;
+		block->base.kind = AST_NULL;
 	}
-	return (Ast *) block;
+	return &block->base;
 }
 
 static Ast *
 let(Parser *parser)
 {
-	AstDeclaration *declaration = ast_create(parser->arena, AST_DECLARATION);
+	AST_CREATE(AstDeclaration, declaration, parser->arena, AST_DECLARATION);
 	eat(parser, TK_LET);
 	eat_identifier(parser, &declaration->name);
 	eat(parser, TK_EQUAL);
 	declaration->value = expression(parser);
-	return (Ast *) declaration;
+	return &declaration->base;
 }
 
 static Ast *
 array(Parser *parser)
 {
-	AstArray *array = ast_create(parser->arena, AST_ARRAY);
+	AST_CREATE(AstArray, array, parser->arena, AST_ARRAY);
 	eat(parser, TK_ARRAY);
 	eat(parser, TK_LPAREN);
 	array->size = expression(parser);
 	eat(parser, TK_COMMA);
 	array->initializer = expression(parser);
 	eat(parser, TK_RPAREN);
-	return (Ast *) array;
+	return &array->base;
 }
 
 static Ast *
 object(Parser *parser)
 {
-	AstObject *object = ast_create(parser->arena, AST_OBJECT);
+	AST_CREATE(AstObject, object, parser->arena, AST_OBJECT);
 	eat(parser, TK_OBJECT);
 	Token object_tok = prev_tok(parser);
 	if (try_eat(parser, TK_EXTENDS)) {
@@ -941,13 +921,13 @@ object(Parser *parser)
 			parser_error(parser, object_tok, "Found object member that is not a declaration");
 		}
 	}
-	return (Ast *) object;
+	return &object->base;
 }
 
 static Ast *
 cond(Parser *parser)
 {
-	AstConditional *conditional = ast_create(parser->arena, AST_IF);
+	AST_CREATE(AstConditional, conditional, parser->arena, AST_IF);
 	eat(parser, TK_IF);
 	conditional->condition = expression(parser);
 	eat(parser, TK_THEN);
@@ -957,24 +937,24 @@ cond(Parser *parser)
 	} else {
 		conditional->alternative = create_null(parser);
 	}
-	return (Ast *) conditional;
+	return &conditional->base;
 }
 
 static Ast *
 loop(Parser *parser)
 {
-	AstLoop *loop = ast_create(parser->arena, AST_WHILE);
+	AST_CREATE(AstLoop, loop, parser->arena, AST_WHILE);
 	eat(parser, TK_WHILE);
 	loop->condition = expression(parser);
 	eat(parser, TK_DO);
 	loop->body = expression(parser);
-	return (Ast *) loop;
+	return &loop->base;
 }
 
 static Ast *
 print(Parser *parser)
 {
-	AstPrint *print = ast_create(parser->arena, AST_PRINT);
+	AST_CREATE(AstPrint, print, parser->arena, AST_PRINT);
 	eat(parser, TK_PRINT);
 	eat(parser, TK_LPAREN);
 	eat_string(parser, &print->format);
@@ -994,7 +974,7 @@ print(Parser *parser)
 	if (formats != print->argument_cnt) {
 		parser_error(parser, fmt_tok, "Invalid number of print arguments: %zu expected, got %zu", formats, print->argument_cnt);
 	}
-	return (Ast *) print;
+	return &print->base;
 }
 
 static Ast *
@@ -1011,14 +991,14 @@ paren(Parser *parser)
 static Ast *
 function(Parser *parser)
 {
-	AstFunction *function = ast_create(parser->arena, AST_FUNCTION);
-	Ast *ast = (Ast *) function;
+	AST_CREATE(AstFunction, function, parser->arena, AST_FUNCTION);
+	Ast *ast = &function->base;
 	eat(parser, TK_FUNCTION);
 	if (tok_is_identifier(peek(parser))) {
-		AstDeclaration *declaration = ast_create(parser->arena, AST_DECLARATION);
+		AST_CREATE(AstDeclaration, declaration, parser->arena, AST_DECLARATION);
 		eat_identifier(parser, &declaration->name);
-		declaration->value = (Ast *) function;
-		ast = (Ast *) declaration;
+		declaration->value = &function->base;
+		ast = &declaration->base;
 	}
 	eat(parser, TK_LPAREN);
 	identifier_list(parser, &function->parameters, &function->parameter_cnt, TK_COMMA, TK_RPAREN);
@@ -1039,7 +1019,7 @@ stop(Parser *parser, Ast *left, int rbp)
 static Ast *
 binop(Parser *parser, Ast *left, int rbp)
 {
-	AstMethodCall *method_call = ast_create(parser->arena, AST_METHOD_CALL);
+	AST_CREATE(AstMethodCall, method_call, parser->arena, AST_METHOD_CALL);
 	Token token = discard(parser);
 	method_call->object = left;
 	method_call->name.name = token.pos;
@@ -1048,7 +1028,7 @@ binop(Parser *parser, Ast *left, int rbp)
 	method_call->arguments[0] = expression_bp(parser, rbp);
 	//method_call->arguments = expression_bp(parser, rbp);
 	method_call->argument_cnt = 1;
-	return (Ast *) method_call;
+	return &method_call->base;
 }
 
 static Ast *
@@ -1060,19 +1040,19 @@ call(Parser *parser, Ast *left, int rbp)
 	eat(parser, TK_LPAREN);
 	switch (left->kind) {
 	case AST_FIELD_ACCESS: {
+		AstFieldAccess *field_access = (AstFieldAccess *) left;
+		AST_CREATE(AstMethodCall, method_call, parser->arena, AST_METHOD_CALL);
 		left->kind = AST_METHOD_CALL;
-		AstFieldAccess field_access = left->field_access;
-		AstMethodCall *method_call = &left->method_call;
-		method_call->object = field_access.object;
-		method_call->name = field_access.field;
+		method_call->object = field_access->object;
+		method_call->name = field_access->field;
 		expression_list(parser, &method_call->arguments, &method_call->argument_cnt, TK_COMMA, TK_RPAREN);
-		return left;
+		return &method_call->base;
 	}
 	default: {
-		AstFunctionCall *function_call = ast_create(parser->arena, AST_FUNCTION_CALL);
+		AST_CREATE(AstFunctionCall, function_call, parser->arena, AST_FUNCTION_CALL);
 		function_call->function = left;
 		expression_list(parser, &function_call->arguments, &function_call->argument_cnt, TK_COMMA, TK_RPAREN);
-		return (Ast *) function_call;
+		return &function_call->base;
 	}
 	}
 }
@@ -1082,23 +1062,23 @@ indexing(Parser *parser, Ast *left, int rbp)
 {
 	// rbp not used - delimited by TK_RBRACKET, not by precedence
 	(void) rbp;
-	AstIndexAccess *index_access = ast_create(parser->arena, AST_INDEX_ACCESS);
+	AST_CREATE(AstIndexAccess, index_access, parser->arena, AST_INDEX_ACCESS);
 	eat(parser, TK_LBRACKET);
 	index_access->object = left;
 	index_access->index = expression(parser);
 	eat(parser, TK_RBRACKET);
-	return (Ast *) index_access;
+	return &index_access->base;
 }
 
 static Ast *
 field(Parser *parser, Ast *left, int rbp)
 {
 	(void) rbp;
-	AstFieldAccess *field_access = ast_create(parser->arena, AST_FIELD_ACCESS);
+	AST_CREATE(AstFieldAccess, field_access, parser->arena, AST_FIELD_ACCESS);
 	eat(parser, TK_DOT);
 	field_access->object = left;
 	eat_identifier(parser, &field_access->field);
-	return (Ast *) field_access;
+	return &field_access->base;
 }
 
 static Ast *
@@ -1109,30 +1089,27 @@ assign(Parser *parser, Ast *left, int rbp)
 	eat(parser, TK_LARROW);
 	switch (left->kind) {
 	case AST_VARIABLE_ACCESS: {
-		left->kind = AST_VARIABLE_ASSIGNMENT;
-		AstVariableAccess variable_access = left->variable_access;
-		AstVariableAssignment *variable_assignment = &left->variable_assignment;
-		variable_assignment->name = variable_access.name;
+		AstVariableAccess *variable_access = (AstVariableAccess *) left;
+		AST_CREATE(AstVariableAssignment, variable_assignment, parser->arena, AST_VARIABLE_ASSIGNMENT);
+		variable_assignment->name = variable_access->name;
 		variable_assignment->value = expression_bp(parser, rbp);
-		return left;
+		return &variable_assignment->base;
 	}
 	case AST_FIELD_ACCESS: {
-		left->kind = AST_FIELD_ASSIGNMENT;
-		AstFieldAccess field_access = left->field_access;
-		AstFieldAssignment *field_assignment = &left->field_assignment;
-		field_assignment->object = field_access.object;
-		field_assignment->field = field_access.field;
+		AstFieldAccess *field_access = (AstFieldAccess *) left;
+		AST_CREATE(AstFieldAssignment, field_assignment, parser->arena, AST_FIELD_ASSIGNMENT);
+		field_assignment->object = field_access->object;
+		field_assignment->field = field_access->field;
 		field_assignment->value = expression_bp(parser, rbp);
-		return left;
+		return &field_assignment->base;
 	}
 	case AST_INDEX_ACCESS: {
-		left->kind = AST_INDEX_ASSIGNMENT;
-		AstIndexAccess index_access = left->index_access;
-		AstIndexAssignment *index_assignment = &left->index_assignment;
-		index_assignment->object = index_access.object;
-		index_assignment->index = index_access.index;
+		AstIndexAccess *index_access = (AstIndexAccess *) left;
+		AST_CREATE(AstIndexAssignment, index_assignment, parser->arena, AST_INDEX_ASSIGNMENT);
+		index_assignment->object = index_access->object;
+		index_assignment->index = index_access->index;
 		index_assignment->value = expression_bp(parser, rbp);
-		return left;
+		return &index_assignment->base;
 	}
 	default:
 		parser_error(parser, parser->prev, "Invalid assignment left hand side, expected variable, index or field access");
@@ -1201,14 +1178,14 @@ parse(ErrorContext *ec, Arena *arena, u8 *buf, size_t buf_len)
 	garena_init(&scratch);
 	parser_init(&parser, ec, arena, &scratch, buf, buf_len);
 	// TODO: setjmp for GArena destruction
-	AstTop *top = ast_create(parser.arena, AST_TOP);
+	AST_CREATE(AstTop, top, parser.arena, AST_TOP);
 	expression_list(&parser, &top->expressions, &top->expression_cnt, TK_SEMICOLON, TK_EOF);
 	// empty program => null
 	if (top->expression_cnt == 0) {
-		top->kind = AST_NULL;
+		top->base.kind = AST_NULL;
 	}
 	garena_destroy(&scratch);
-	return (Ast *) top;
+	return &top->base;
 }
 
 typedef enum {
@@ -1842,35 +1819,41 @@ interpret(InterpreterState *is, Ast *ast)
 		return make_null();
 	}
 	case AST_BOOLEAN: {
-		return make_boolean(ast->boolean.value);
+		AstBoolean *boolean = (AstBoolean *) ast;
+		return make_boolean(boolean->value);
 	}
 	case AST_INTEGER: {
-		return make_integer(ast->integer.value);
+		AstInteger *integer = (AstInteger *) ast;
+		return make_integer(integer->value);
 	}
 	case AST_ARRAY: {
-		Value size_value = interpret(is, ast->array.size);
+		AstArray *array = (AstArray *) ast;
+		Value size_value = interpret(is, array->size);
 		size_t size = value_as_size(is->ec, size_value);
 		Value array_value = make_array(size);
-		Array *array = value_as_array(array_value);
+		Array *array_obj = value_as_array(array_value);
 		Environment *saved_env = is->env;
 		for (size_t i = 0; i < size; i++) {
-			array->values[i] = interpret(is, ast->array.initializer);
+			array_obj->values[i] = interpret(is, array->initializer);
 			is->env = saved_env;
 		}
 		return array_value;
 	}
 	case AST_OBJECT: {
-		Value parent = interpret(is, ast->object.extends);
-		Value object_value = make_object(ast->object.member_cnt);
-		Object *object = value_as_object(object_value);
-		object->parent = parent;
-		for (size_t i = 0; i < ast->object.member_cnt; i++) {
-			Ast *ast_member = ast->object.members[i];
+		AstObject *object = (AstObject *) ast;
+		Value parent = interpret(is, object->extends);
+		Value object_value = make_object(object->member_cnt);
+		Object *object_obj = value_as_object(object_value);
+		object_obj->parent = parent;
+		for (size_t i = 0; i < object->member_cnt; i++) {
+			Ast *ast_member = object->members[i];
 			switch (ast_member->kind) {
-			case AST_DECLARATION:
-				object->fields[i].name = ast_member->declaration.name;
-				object->fields[i].value = interpret(is, ast_member->declaration.value);
+			case AST_DECLARATION: {
+				AstDeclaration *declaration = (AstDeclaration *) ast_member;
+				object_obj->fields[i].name = declaration->name;
+				object_obj->fields[i].value = interpret(is, declaration->value);
 				break;
+			}
 			default:
 				UNREACHABLE();
 			}
@@ -1878,81 +1861,94 @@ interpret(InterpreterState *is, Ast *ast)
 		return object_value;
 	}
 	case AST_FUNCTION: {
-		return make_function_ast(&ast->function);
+		AstFunction *function = (AstFunction *) ast;
+		return make_function_ast(function);
 	}
 
 	case AST_DECLARATION: {
-		Value value = interpret(is, ast->declaration.value);
-		env_define(is->env, ast->declaration.name, value);
+		AstDeclaration *declaration = (AstDeclaration *) ast;
+		Value value = interpret(is, declaration->value);
+		env_define(is->env, declaration->name, value);
 		return value;
 	}
 
 	case AST_VARIABLE_ACCESS: {
-		Value *lvalue = env_lookup(is, ast->variable_access.name);
+		AstVariableAccess *variable_access = (AstVariableAccess *) ast;
+		Value *lvalue = env_lookup(is, variable_access->name);
 		return *lvalue;
 	}
 	case AST_VARIABLE_ASSIGNMENT: {
-		Value value = interpret(is, ast->variable_assignment.value);
-		Value *lvalue = env_lookup(is, ast->variable_assignment.name);
+		AstVariableAssignment *variable_assignment = (AstVariableAssignment *) ast;
+		Value value = interpret(is, variable_assignment->value);
+		Value *lvalue = env_lookup(is, variable_assignment->name);
 		return *lvalue = value;
 	}
 
 	case AST_INDEX_ACCESS: {
-		Value object = interpret(is, ast->index_access.object);
-		return interpreter_call_method(is, object, false, GET, &ast->index_access.index, 1);
+		AstIndexAccess *index_access = (AstIndexAccess *) ast;
+		Value object = interpret(is, index_access->object);
+		return interpreter_call_method(is, object, false, GET, &index_access->index, 1);
 	}
 	case AST_INDEX_ASSIGNMENT: {
-		Value object = interpret(is, ast->index_assignment.object);
-		Ast *arguments[2] = {ast->index_assignment.index, ast->index_assignment.value};
+		AstIndexAssignment *index_assignment = (AstIndexAssignment *) ast;
+		Value object = interpret(is, index_assignment->object);
+		Ast *arguments[2] = {index_assignment->index, index_assignment->value};
 		return interpreter_call_method(is, object, false, SET, &arguments[0], 2);
 	}
 
 	case AST_FIELD_ACCESS: {
-		Value object = interpret(is, ast->field_access.object);
-		Value *lvalue = value_field(is->ec, object, &object, ast->field_access.field);
+		AstFieldAccess *field_access = (AstFieldAccess *) ast;
+		Value object = interpret(is, field_access->object);
+		Value *lvalue = value_field(is->ec, object, &object, field_access->field);
 		return *lvalue;
 	}
 	case AST_FIELD_ASSIGNMENT: {
-		Value object = interpret(is, ast->field_assignment.object);
-		Value value = interpret(is, ast->field_assignment.value);
-		Value *lvalue = value_field(is->ec, object, &object, ast->field_access.field);
+		AstFieldAssignment *field_assignment = (AstFieldAssignment *) ast;
+		Value object = interpret(is, field_assignment->object);
+		Value value = interpret(is, field_assignment->value);
+		Value *lvalue = value_field(is->ec, object, &object, field_assignment->field);
 		return *lvalue = value;
 	}
 
 	case AST_FUNCTION_CALL: {
-		Value function = interpret(is, ast->function_call.function);
-		return interpreter_call_method(is, function, true, EMPTY, ast->function_call.arguments, ast->function_call.argument_cnt);
+		AstFunctionCall *function_call = (AstFunctionCall *) ast;
+		Value function = interpret(is, function_call->function);
+		return interpreter_call_method(is, function, true, EMPTY, function_call->arguments, function_call->argument_cnt);
 	}
 	case AST_METHOD_CALL: {
-		Value object = interpret(is, ast->method_call.object);
-		return interpreter_call_method(is, object, false, ast->method_call.name, ast->method_call.arguments, ast->method_call.argument_cnt);
+		AstMethodCall *method_call = (AstMethodCall *) ast;
+		Value object = interpret(is, method_call->object);
+		return interpreter_call_method(is, object, false, method_call->name, method_call->arguments, method_call->argument_cnt);
 	}
 
 	case AST_IF: {
-		Value condition = interpret(is, ast->conditional.condition);
+		AstConditional *conditional = (AstConditional *) ast;
+		Value condition = interpret(is, conditional->condition);
 		if (value_to_bool(condition)) {
-			return interpret(is, ast->conditional.consequent);
+			return interpret(is, conditional->consequent);
 		} else {
-			return interpret(is, ast->conditional.alternative);
+			return interpret(is, conditional->alternative);
 		}
 	}
 	case AST_WHILE: {
-		while (value_to_bool(interpret(is, ast->loop.condition))) {
-			interpret(is, ast->loop.body);
+		AstLoop *loop = (AstLoop *) ast;
+		while (value_to_bool(interpret(is, loop->condition))) {
+			interpret(is, loop->body);
 		}
 		return make_null();
 	}
 	case AST_PRINT: {
-		Value *arguments = calloc(ast->print.argument_cnt, sizeof(*arguments));
-		for (size_t i = 0; i < ast->print.argument_cnt; i++) {
-			arguments[i] = interpret(is, ast->print.arguments[i]);
+		AstPrint *print = (AstPrint *) ast;
+		Value *arguments = calloc(print->argument_cnt, sizeof(*arguments));
+		for (size_t i = 0; i < print->argument_cnt; i++) {
+			arguments[i] = interpret(is, print->arguments[i]);
 		}
-		builtin_print(is->ec, ast->print.format, arguments, ast->print.argument_cnt);
+		builtin_print(is->ec, print->format, arguments, print->argument_cnt);
 		free(arguments);
 		return make_null();
 	}
 	case AST_BLOCK: {
-		AstBlock *block = &ast->block;
+		AstBlock *block = (AstBlock *) ast;
 		Environment *saved_env = is->env;
 		is->env = env_create(is->env);
 		Value value = interpret(is, block->expressions[0]);
@@ -1964,7 +1960,7 @@ interpret(InterpreterState *is, Ast *ast)
 		return value;
 	}
 	case AST_TOP: {
-		AstTop *top = &ast->top;
+		AstTop *top = (AstTop *) ast;
 		Value value = interpret(is, top->expressions[0]);
 		for (size_t i = 1; i < top->expression_cnt; i++) {
 			value = interpret(is, top->expressions[i]);
@@ -2577,21 +2573,23 @@ compile(CompilerState *cs, Ast *ast)
 		return;
 	}
 	case AST_BOOLEAN: {
+		AstBoolean *boolean = (AstBoolean *) ast;
 		literal(cs, (Constant) {
 		       .kind = CK_BOOLEAN,
-		       .boolean = ast->boolean.value,
+		       .boolean = boolean->value,
 		});
 		return;
 	}
 	case AST_INTEGER: {
+		AstInteger *integer = (AstInteger *) ast;
 		literal(cs, (Constant) {
 		       .kind = CK_INTEGER,
-		       .integer = ast->integer.value,
+		       .integer = integer->value,
 		});
 		return;
 	}
 	case AST_ARRAY: {
-		AstArray *array = &ast->array;
+		AstArray *array = (AstArray *) ast;
 
 		// Try low hanging fruit "simple initializers" that can't change
 		switch (array->initializer->kind) {
@@ -2648,7 +2646,7 @@ compile(CompilerState *cs, Ast *ast)
 		return;
 	}
 	case AST_OBJECT: {
-		AstObject *object = &ast->object;
+		AstObject *object = (AstObject *) ast;
 		compile(cs, object->extends);
 		bool saved_in_object = cs->in_object;
 		size_t start = garena_save(&cs->members);
@@ -2681,7 +2679,7 @@ compile(CompilerState *cs, Ast *ast)
 		return;
 	}
 	case AST_FUNCTION: {
-		AstFunction *function = &ast->function;
+		AstFunction *function = (AstFunction *) ast;
 		Environment *saved_environment = cs->env;
 		u16 saved_local_cnt = cs->local_cnt;
 		size_t start = garena_save(&cs->instructions);
@@ -2723,7 +2721,7 @@ compile(CompilerState *cs, Ast *ast)
 	}
 
 	case AST_DECLARATION: {
-		AstDeclaration *declaration = &ast->declaration;
+		AstDeclaration *declaration = (AstDeclaration *) ast;
 		compile(cs, declaration->value);
 		if (cs->in_object || !cs->in_block) {
 			u16 name = add_string(cs, declaration->name);
@@ -2740,7 +2738,7 @@ compile(CompilerState *cs, Ast *ast)
 	}
 
 	case AST_VARIABLE_ACCESS: {
-		AstVariableAccess *variable_access = &ast->variable_access;
+		AstVariableAccess *variable_access = (AstVariableAccess *) ast;
 		Value *local_index = env_lookup_raw(cs->env, variable_access->name);
 		if (local_index) {
 			op_index(cs, OP_GET_LOCAL, value_as_integer(*local_index));
@@ -2750,7 +2748,7 @@ compile(CompilerState *cs, Ast *ast)
 		return;
 	}
 	case AST_VARIABLE_ASSIGNMENT: {
-		AstVariableAssignment *variable_assignment = &ast->variable_assignment;
+		AstVariableAssignment *variable_assignment = (AstVariableAssignment *) ast;
 		compile(cs, variable_assignment->value);
 		Value *local_index = env_lookup_raw(cs->env, variable_assignment->name);
 		if (local_index) {
@@ -2762,14 +2760,14 @@ compile(CompilerState *cs, Ast *ast)
 	}
 
 	case AST_INDEX_ACCESS: {
-		AstIndexAccess *index_access = &ast->index_access;
+		AstIndexAccess *index_access = (AstIndexAccess *) ast;
 		compile(cs, index_access->object);
 		compile(cs, index_access->index);
 		op_string_cnt(cs, OP_CALL_METHOD, GET, 2);
 		return;
 	}
 	case AST_INDEX_ASSIGNMENT: {
-		AstIndexAssignment *index_assignment = &ast->index_assignment;
+		AstIndexAssignment *index_assignment = (AstIndexAssignment *) ast;
 		compile(cs, index_assignment->object);
 		compile(cs, index_assignment->index);
 		compile(cs, index_assignment->value);
@@ -2778,13 +2776,13 @@ compile(CompilerState *cs, Ast *ast)
 	}
 
 	case AST_FIELD_ACCESS: {
-		AstFieldAccess *field_access = &ast->field_access;
+		AstFieldAccess *field_access = (AstFieldAccess *) ast;
 		compile(cs, field_access->object);
 		op_string(cs, OP_GET_FIELD, field_access->field);
 		return;
 	}
 	case AST_FIELD_ASSIGNMENT: {
-		AstFieldAssignment *field_assignment = &ast->field_assignment;
+		AstFieldAssignment *field_assignment = (AstFieldAssignment *) ast;
 		compile(cs, field_assignment->object);
 		compile(cs, field_assignment->value);
 		op_string(cs, OP_SET_FIELD, field_assignment->field);
@@ -2792,7 +2790,7 @@ compile(CompilerState *cs, Ast *ast)
 	}
 
 	case AST_FUNCTION_CALL: {
-		AstFunctionCall *function_call = &ast->function_call;
+		AstFunctionCall *function_call = (AstFunctionCall *) ast;
 		compile(cs, function_call->function);
 		for (size_t i = 0; i < function_call->argument_cnt; i++) {
 			compile(cs, function_call->arguments[i]);
@@ -2802,7 +2800,7 @@ compile(CompilerState *cs, Ast *ast)
 		return;
 	}
 	case AST_METHOD_CALL: {
-		AstMethodCall *method_call = &ast->method_call;
+		AstMethodCall *method_call = (AstMethodCall *) ast;
 		compile(cs, method_call->object);
 		for (size_t i = 0; i < method_call->argument_cnt; i++) {
 			compile(cs, method_call->arguments[i]);
@@ -2812,7 +2810,7 @@ compile(CompilerState *cs, Ast *ast)
 	}
 
 	case AST_IF: {
-		AstConditional *conditional = &ast->conditional;
+		AstConditional *conditional = (AstConditional *) ast;
 		size_t cond_to_consequent;
 		size_t cond_to_alternative;
 		size_t consequent_to_after;
@@ -2832,7 +2830,7 @@ compile(CompilerState *cs, Ast *ast)
 		return;
 	}
 	case AST_WHILE: {
-		AstLoop *loop = &ast->loop;
+		AstLoop *loop = (AstLoop *) ast;
 		size_t condition_to_body;
 		size_t condition_to_after;
 
@@ -2852,7 +2850,7 @@ compile(CompilerState *cs, Ast *ast)
 		return;
 	}
 	case AST_PRINT: {
-		AstPrint *print = &ast->print;
+		AstPrint *print = (AstPrint *) ast;
 		for (size_t i = 0; i < print->argument_cnt; i++) {
 			compile(cs, print->arguments[i]);
 		}
@@ -2860,7 +2858,7 @@ compile(CompilerState *cs, Ast *ast)
 		return;
 	}
 	case AST_BLOCK: {
-		AstBlock *block = &ast->block;
+		AstBlock *block = (AstBlock *) ast;
 		Environment *saved_environment = cs->env;
 		bool saved_in_block = cs->in_block;
 		cs->in_block = true;
@@ -2876,7 +2874,7 @@ compile(CompilerState *cs, Ast *ast)
 		return;
 	}
 	case AST_TOP: {
-		AstTop *top = &ast->top;
+		AstTop *top = (AstTop *) ast;
 		compile(cs, top->expressions[0]);
 		for (size_t i = 1; i < top->expression_cnt; i++) {
 			op(cs, OP_DROP);
