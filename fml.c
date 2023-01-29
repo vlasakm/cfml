@@ -219,7 +219,7 @@ verror(ErrorContext *ec, const u8 *pos, char *kind, bool fatal, const char *fmt,
 {
 	Error *error = arena_alloc(ec->arena, sizeof(*error));
 	error->msg = arena_vaprintf(ec->arena, fmt, ap);
-error->pos = pos;
+	error->pos = pos;
 	error->kind = kind;
 	error->next = NULL;
 	if (ec->error_tail) {
