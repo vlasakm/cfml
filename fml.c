@@ -2161,32 +2161,9 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 	case CK_METHOD:
 		constant->method.parameter_cnt = read_u8(input);
 		constant->method.local_cnt = read_u16(input);
-		u32 instruction_cnt = read_u32(input);
+		constant->method.instruction_len = read_u32(input);
 		constant->method.instruction_start = *input;
-		for (size_t i = 0; i < instruction_cnt; i++) {
-			switch (read_u8(input)) {
-			case OP_LITERAL: *input += 2; break;
-			case OP_ARRAY: break;
-			case OP_OBJECT: *input += 2; break;
-			case OP_FUNCTION: *input += 2; break;
-			case OP_GET_LOCAL: *input += 2; break;
-			case OP_SET_LOCAL: *input += 2; break;
-			case OP_GET_GLOBAL: *input += 2; break;
-			case OP_SET_GLOBAL: *input += 2; break;
-			case OP_GET_FIELD: *input += 2; break;
-			case OP_SET_FIELD: *input += 2; break;
-			case OP_LABEL: *input += 2; break;
-			case OP_JUMP: *input += 2; break;
-			case OP_BRANCH: *input += 2; break;
-			case OP_CALL_FUNCTION: *input += 1; break;
-			case OP_CALL_METHOD: *input += 3; break;
-			case OP_PRINT: *input += 3; break;
-			case OP_DROP: break;
-			case OP_RETURN: break;
-			default: assert(false);
-			}
-		}
-		constant->method.instruction_len = *input - constant->method.instruction_start;
+		*input += constant->method.instruction_len;
 		break;
 	case CK_CLASS: {
 		read_class(input, &constant->class);
@@ -3049,32 +3026,7 @@ write_constant(FILE *f, Constant *constant)
 	case CK_METHOD:
 		write_u8(f, constant->method.parameter_cnt);
 		write_u16(f, constant->method.local_cnt);
-		size_t instruction_cnt = 0;
-		for (size_t i = 0; i < constant->method.instruction_len; i++) {
-			instruction_cnt += 1;
-			switch (constant->method.instruction_start[i]) {
-			case OP_LITERAL: i += 2; break;
-			case OP_ARRAY: break;
-			case OP_OBJECT: i += 2; break;
-			case OP_FUNCTION: i += 2; break;
-			case OP_GET_LOCAL: i += 2; break;
-			case OP_SET_LOCAL: i += 2; break;
-			case OP_GET_GLOBAL: i += 2; break;
-			case OP_SET_GLOBAL: i += 2; break;
-			case OP_GET_FIELD: i += 2; break;
-			case OP_SET_FIELD: i += 2; break;
-			case OP_LABEL: i += 2; break;
-			case OP_JUMP: i += 2; break;
-			case OP_BRANCH: i += 2; break;
-			case OP_CALL_FUNCTION: i += 1; break;
-			case OP_CALL_METHOD: i += 3; break;
-			case OP_PRINT: i += 3; break;
-			case OP_DROP: break;
-			case OP_RETURN: break;
-			default: assert(false);
-			}
-		}
-		write_u32(f, instruction_cnt);
+		write_u32(f, constant->method.instruction_len);
 		fwrite(constant->method.instruction_start, constant->method.instruction_len, 1, f);
 		break;
 	case CK_CLASS: {
