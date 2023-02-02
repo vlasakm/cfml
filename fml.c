@@ -2122,6 +2122,30 @@ read_class(u8 **input, Class *class)
 	}
 }
 
+static bool
+constant_eq(Constant *a, Constant *b)
+{
+	if (a->kind != b->kind) {
+		return false;
+	}
+	switch (a->kind) {
+	case CK_NULL:
+		return true;
+	case CK_BOOLEAN:
+		return a->boolean == b->boolean;
+	case CK_INTEGER:
+		return a->integer == b->integer;
+	case CK_STRING:
+		return str_eq(a->string, b->string);
+		break;
+	case CK_METHOD:
+		return false;
+	case CK_CLASS:
+		return false;
+	}
+	return false;
+}
+
 static void
 read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 {
@@ -2464,6 +2488,11 @@ static u16
 add_constant(CompilerState *cs, Constant constant)
 {
 	size_t index = garena_cnt(&cs->constants, Constant);
+	for (size_t i = index; i--;) {
+		if (constant_eq(&((Constant *) garena_mem(&cs->constants))[i], &constant)) {
+			return i;
+		}
+	}
 	garena_push_value(&cs->constants, Constant, constant);
 	if (index > 0xFFFF) {
 		error(cs->ec, NULL, "compile", true, "Too many constants (only 65536 allowed)");
