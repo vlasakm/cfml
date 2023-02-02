@@ -2684,11 +2684,9 @@ compile(CompilerState *cs, Ast *ast)
 		cs->in_object = false;
 
 		cs->env = env_create(cs->env);
-		env_define(cs->env, STR("this"), make_integer(cs->local_cnt));
-		cs->local_cnt += 1;
+		env_define(cs->env, STR("this"), make_integer(cs->local_cnt++));
 		for (size_t i = 0; i < function->parameter_cnt; i++) {
-			env_define(cs->env, function->parameters[i], make_integer(cs->local_cnt));
-			cs->local_cnt += 1;
+			env_define(cs->env, function->parameters[i], make_integer(cs->local_cnt++));
 		}
 		compile(cs, function->body);
 		op(cs, OP_RETURN);
