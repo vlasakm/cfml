@@ -3351,6 +3351,174 @@ write_ast_json_field_string_array(OutputState *os, char *name, Str *strings, siz
 	fprintf(os->f, "%*s.%s_cnt = %zu,\n", indent, "", name, string_cnt);
 }
 
+void
+print_members(Class *class, Program *program, FILE *f)
+{
+	u8 *members = class->members;
+	for (size_t i = 0; i < class->member_cnt; i++) {
+		if (i != 0) {
+			fprintf(f, ", ");
+		}
+		u16 member_name = read_u16(&members);
+		Constant *name = &program->constants[member_name];
+		assert(name->kind == CK_STRING);
+		fprintf(f, "#%"PRIu16":\"%.*s\"", member_name, (int) name->string.len, name->string.str);
+	}
+}
+
+void
+print_constant_string(Program *program, u8 **ip, FILE *f)
+{
+	u16 constant_index = read_u16(ip);
+	Constant *constant = &program->constants[constant_index];
+	assert(constant->kind == CK_STRING);
+	fprintf(f, "\"%.*s\"", (int) constant->string.len, constant->string.str);
+}
+
+void
+print_constant(Constant *constant, Program *program, FILE *f)
+{
+	switch (constant->kind) {
+	case CK_NULL:
+		fprintf(f, "null");
+		break;
+	case CK_BOOLEAN: {
+		fprintf(f, "%s", constant->boolean ? "true" : "false");
+		break;
+	}
+	case CK_INTEGER:
+		fprintf(f, "%"PRIi32, constant->integer);
+		break;
+	case CK_STRING:
+		fprintf(f, "\"%.*s\"", (int) constant->string.len, constant->string.str);
+		break;
+	case CK_METHOD: {
+		CMethod *method = &constant->method;
+		fprintf(f, "Method(params: %"PRIi8", locals: %"PRIi8", size: %zu)\n", method->parameter_cnt, method->local_cnt, method->instruction_len);
+		u8 *start = method->instruction_start;
+		for (u8 *ip = start;;) {
+			fprintf(f, "%18zu: ", ip - start);
+			switch (read_u8(&ip)) {
+			case OP_LITERAL: {
+				u16 constant_index = read_u16(&ip);
+				Constant *constant = &program->constants[constant_index];
+				fprintf(f, "literal ");
+				print_constant(constant, program, f);
+				break;
+			}
+			case OP_ARRAY: {
+				fprintf(f, "array");
+				break;
+			}
+			case OP_OBJECT: {
+				u16 constant_index = read_u16(&ip);
+				fprintf(f, "object #%"PRIu16, constant_index);
+				break;
+			}
+			case OP_FUNCTION: {
+				u16 constant_index = read_u16(&ip);
+				Constant *constant = &program->constants[constant_index];
+				assert(constant->kind == CK_METHOD);
+				fprintf(f, "function #%"PRIu16, constant_index);
+				break;
+			}
+			case OP_GET_LOCAL: {
+				u16 local_index = read_u16(&ip);
+				fprintf(f, "get local %"PRIu16, local_index);
+				break;
+			}
+			case OP_SET_LOCAL: {
+				u16 local_index = read_u16(&ip);
+				fprintf(f, "set local %"PRIu16, local_index);
+				break;
+			}
+			case OP_GET_GLOBAL: {
+				fprintf(f, "get global ");
+				print_constant_string(program, &ip, f);
+				break;
+			}
+			case OP_SET_GLOBAL: {
+				fprintf(f, "set global ");
+				print_constant_string(program, &ip, f);
+				break;
+			}
+			case OP_GET_FIELD: {
+				fprintf(f, "get field ");
+				print_constant_string(program, &ip, f);
+				break;
+			}
+			case OP_SET_FIELD: {
+				fprintf(f, "set field ");
+				print_constant_string(program, &ip, f);
+				break;
+			}
+			case OP_JUMP: {
+				i16 offset = read_u16(&ip);
+				fprintf(f, "jump @%zu (%+"PRIi16")", (size_t)(ip - start) + offset, offset);
+				break;
+			}
+			case OP_BRANCH: {
+				i16 offset = read_u16(&ip);
+				fprintf(f, "branch @%zu (%+"PRIi16")", (size_t)(ip - start) + offset, offset);
+				break;
+			}
+			case OP_CALL_FUNCTION: {
+				u8 argument_cnt = read_u8(&ip);
+				fprintf(f, "call function %"PRIu8, argument_cnt);
+				break;
+			}
+			case OP_CALL_METHOD: {
+				fprintf(f, "call method ");
+				print_constant_string(program, &ip, f);
+				u8 argument_cnt = read_u8(&ip);
+				fprintf(f, " %"PRIu8, argument_cnt);
+				break;
+			}
+			case OP_PRINT: {
+				fprintf(f, "print ");
+				print_constant_string(program, &ip, f);
+				u8 argument_cnt = read_u8(&ip);
+				fprintf(f, " %"PRIu8, argument_cnt);
+				break;
+			}
+			case OP_DROP: {
+				fprintf(f, "drop");
+				break;
+			}
+			case OP_RETURN: {
+				fprintf(f, "return");
+				return;
+			}
+			}
+			fprintf(f, "\n");
+		}
+		break;
+	}
+	case CK_CLASS:
+		fprintf(f, "Class(");
+		print_members(&constant->class, program, f);
+		fprintf(f, ")");
+		break;
+	default:
+		UNREACHABLE();
+	}
+}
+
+void
+disassemble(Program *program, FILE *f)
+{
+	fprintf(f, "Constant Pool:\n");
+	for (size_t i = 0; i < program->constant_cnt; i++) {
+		Constant *constant = &program->constants[i];
+		fprintf(f, "%5zu: ", i);
+		print_constant(constant, program, f);
+		fprintf(f, "\n");
+	}
+	fprintf(f, "Entry: %"PRIu16"\n", program->entry_point);
+	fprintf(f, "Globals: ");
+	print_members(&program->global_class, program, f);
+	fprintf(f, "\n");
+}
 
 int
 main(int argc, char **argv) {
@@ -3429,6 +3597,16 @@ main(int argc, char **argv) {
 		Program program2;
 		read_program(&ec, &program2, buf, fsize);
 		vm_run(&ec, &program2);
+	} else if (strcmp(argv[1], "disassemble") == 0) {
+		Program program;
+		read_program(&ec, &program, buf, fsize);
+		disassemble(&program, stdout);
+	} else if (strcmp(argv[1], "dump") == 0) {
+		Ast *ast = parse(&ec, arena, buf, fsize);
+		assert(ast);
+		Program program;
+		compile_ast(&ec, arena, &program, ast);
+		disassemble(&program, stdout);
 	}
 
 end:
