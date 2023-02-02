@@ -2022,7 +2022,7 @@ interpret_ast(ErrorContext *ec, Ast *ast)
 	env_destroy(env);
 }
 
-// Parse little endian numbers from byte array.Beware of implicit promotion from uint8_t to signed int.
+// Parse little endian numbers from byte array. Beware of implicit promotion from uint8_t to signed int.
 // https://commandcenter.blogspot.com/2012/04/byte-order-fallacy.html
 // https://www.reddit.com/r/C_Programming/comments/bjuk3v/the_byte_order_fallacy/embbwq2/
 
@@ -3353,8 +3353,9 @@ main(int argc, char **argv) {
 	if (strcmp(argv[1], "parse") == 0) {
 		Ast *ast = parse(&ec, arena, buf, fsize);
 		assert(ast);
-		assert(ast->kind == AST_TOP);
-		ast = ((AstTop *)ast)->expressions[0];
+		if (ast->kind == AST_TOP) {
+			ast = ((AstTop *)ast)->expressions[0];
+		}
 		OutputState os = { .f = stdout };
 		write_ast_json(&os, ast, 4, true);
 	} else if (strcmp(argv[1], "parse_top") == 0) {
