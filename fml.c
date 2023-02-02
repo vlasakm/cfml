@@ -489,37 +489,31 @@ err:
 }
 
 typedef struct {
-	const u8 *name;
+	const u8 *str;
 	size_t len;
-} Identifier;
+} Str;
+#define STR(lit) (Str) { .str = (const u8 *) lit, .len = sizeof(lit) - 1 }
 
 bool
-ident_eq(Identifier a, Identifier b)
+str_eq(Str a, Str b)
 {
-	return a.len == b.len && memcmp(a.name, b.name, a.len) == 0;
+	return a.len == b.len && memcmp(a.str, b.str, a.len) == 0;
 }
 
 
 // FNV-1a hash
 // http://www.isthe.com/chongo/tech/comp/fnv/
 u64
-ident_hash(Identifier id)
+str_hash(Str id)
 {
     u64 h = UINT64_C(14695981039346656037);
     for (size_t i = 0; i < id.len; i++) {
 	// beware of unwanted sign extension!
-        h ^= id.name[i];
+        h ^= id.str[i];
         h *= UINT64_C(1099511628211);
     }
     return h;
 }
-
-static Identifier THIS  = { .name = (const u8*) "this", .len = 4 };
-static Identifier SET   = { .name = (const u8*)  "set", .len = 3 };
-static Identifier GET   = { .name = (const u8*)  "get", .len = 3 };
-static Identifier LESS  = { .name = (const u8*)   "<",  .len = 1 };
-static Identifier PLUS  = { .name = (const u8*)   "+",  .len = 1 };
-static Identifier EMPTY = { .name = (const u8*)    "",  .len = 0 };
 
 typedef enum {
 	AST_NULL,
@@ -577,25 +571,25 @@ typedef struct {
 
 typedef struct {
 	Ast base;
-	Identifier *parameters;
+	Str *parameters;
 	size_t parameter_cnt;
 	Ast *body;
 } AstFunction;
 
 typedef struct {
 	Ast base;
-	Identifier name;
+	Str name;
 	Ast *value;
 } AstDefinition;
 
 typedef struct {
 	Ast base;
-	Identifier name;
+	Str name;
 } AstVariableAccess;
 
 typedef struct {
 	Ast base;
-	Identifier name;
+	Str name;
 	Ast *value;
 } AstVariableAssignment;
 
@@ -615,13 +609,13 @@ typedef struct {
 typedef struct {
 	Ast base;
 	Ast *object;
-	Identifier field;
+	Str field;
 } AstFieldAccess;
 
 typedef struct {
 	Ast base;
 	Ast *object;
-	Identifier field;
+	Str field;
 	Ast *value;
 } AstFieldAssignment;
 
@@ -635,7 +629,7 @@ typedef struct {
 typedef struct {
 	Ast base;
 	Ast* object;
-	Identifier name;
+	Str name;
 	Ast **arguments;
 	size_t argument_cnt;
 } AstMethodCall;
@@ -655,7 +649,7 @@ typedef struct {
 
 typedef struct {
 	Ast base;
-	Identifier format;
+	Str format;
 	Ast **arguments;
 	size_t argument_cnt;
 } AstPrint;
@@ -732,24 +726,24 @@ eat(Parser *parser, TokenKind kind)
 }
 
 static void
-eat_identifier(Parser *parser, Identifier *identifier)
+eat_identifier(Parser *parser, Str *identifier)
 {
 	Token tok = discard(parser);
 	if (!tok_is_identifier(tok.kind)) {
 		parser_error(parser, tok, "expected %s, found %s", tok_repr[TK_IDENTIFIER], tok_repr[tok.kind]);
 	}
-	identifier->name = tok.pos;
+	identifier->str = tok.pos;
 	identifier->len = tok.end - tok.pos;
 }
 
 static void
-eat_string(Parser *parser, Identifier *identifier)
+eat_string(Parser *parser, Str *identifier)
 {
 	Token tok = discard(parser);
 	if (tok.kind != TK_STRING) {
 		printf("expected %s, found %s\n", tok_repr[TK_STRING], tok_repr[tok.kind]);
 	}
-	identifier->name = tok.pos;
+	identifier->str = tok.pos;
 	identifier->len = tok.end - tok.pos;
 }
 
@@ -804,18 +798,18 @@ expression_list(Parser *parser, Ast ***list, size_t *n, TokenKind separator, Tok
 }
 
 static void
-identifier_list(Parser *parser, Identifier **list, size_t *n, TokenKind separator, TokenKind terminator)
+identifier_list(Parser *parser, Str **list, size_t *n, TokenKind separator, TokenKind terminator)
 {
 	size_t start = garena_save(parser->scratch);
 	while (!try_eat(parser, terminator)) {
-		eat_identifier(parser, garena_push(parser->scratch, Identifier));
+		eat_identifier(parser, garena_push(parser->scratch, Str));
 		if (!try_eat(parser, separator)) {
 			eat(parser, terminator);
 			break;
 		}
 	}
-	*n = garena_cnt_from(parser->scratch, Identifier, start);
-	*list = move_to_arena(parser->arena, parser->scratch, start, Identifier);
+	*n = garena_cnt_from(parser->scratch, Str, start);
+	*list = move_to_arena(parser->arena, parser->scratch, start, Str);
 }
 
 
@@ -961,7 +955,7 @@ print(Parser *parser)
 	Token fmt_tok = prev_tok(parser);
 	size_t formats = 0;
 	for (size_t i = 0; i < print->format.len; i++) {
-		switch (print->format.name[i]) {
+		switch (print->format.str[i]) {
 		case '\\': continue;
 		case '~': formats += 1;
 		}
@@ -1022,7 +1016,7 @@ binop(Parser *parser, Ast *left, int rbp)
 	AST_CREATE(AstMethodCall, method_call, parser->arena, AST_METHOD_CALL);
 	Token token = discard(parser);
 	method_call->object = left;
-	method_call->name.name = token.pos;
+	method_call->name.str = token.pos;
 	method_call->name.len = token.end - token.pos;
 	method_call->arguments = arena_alloc(parser->arena, sizeof(*method_call->arguments));
 	method_call->arguments[0] = expression_bp(parser, rbp);
@@ -1232,10 +1226,9 @@ typedef struct {
 } Array;
 
 typedef struct {
-	Identifier name;
+	Str name;
 	Value value;
 } Field;
-
 
 typedef struct {
 	GcValue gcvalue;
@@ -1391,9 +1384,9 @@ value_as_function_bc(Value value)
 }
 
 static int
-ident_cmp(Identifier a, Identifier b)
+str_cmp(Str a, Str b)
 {
-	int cmp = memcmp(a.name, b.name, a.len < b.len ? a.len : b.len);
+	int cmp = memcmp(a.str, b.str, a.len < b.len ? a.len : b.len);
 	return cmp == 0 ? (a.len > b.len) - (b.len > a.len) : cmp;
 }
 
@@ -1445,7 +1438,7 @@ value_print(Value value)
 			}
 
 			for (size_t i = 0; i < field_cnt; i++) {
-				for (size_t j = i; j > 0 && ident_cmp(fields[j - 1].name, fields[j].name) > 0; j--) {
+				for (size_t j = i; j > 0 && str_cmp(fields[j - 1].name, fields[j].name) > 0; j--) {
 					Field tmp = fields[j - 1];
 					fields[j - 1] = fields[j];
 					fields[j] = tmp;
@@ -1456,8 +1449,8 @@ value_print(Value value)
 				if (prev) {
 					printf(", ");
 				}
-				Identifier name = fields[i].name;
-				printf("%.*s=", (int)name.len, name.name);
+				Str name = fields[i].name;
+				printf("%.*s=", (int)name.len, name.str);
 				value_print(fields[i].value);
 				prev = true;
 			}
@@ -1474,12 +1467,12 @@ value_print(Value value)
 }
 
 static void
-builtin_print(ErrorContext *ec, Identifier format, Value *arguments, size_t argument_cnt)
+builtin_print(ErrorContext *ec, Str format, Value *arguments, size_t argument_cnt)
 {
 	bool in_escape = false;
 	size_t arg_index = 0;
 	for (size_t i = 0; i < format.len; i++) {
-		u8 c = format.name[i];
+		u8 c = format.str[i];
 		if (in_escape) {
 			in_escape = false;
 			switch (c) {
@@ -1545,7 +1538,7 @@ array_index(ErrorContext *ec, Value array_value, Value index_value)
 }
 
 Value *
-value_field_try(Value value, Value *receiver, Identifier name)
+value_field_try(Value value, Value *receiver, Str name)
 {
 	if (!value_is_object(value)) {
 		// We did not find the field, but we have the eldest parent
@@ -1555,7 +1548,7 @@ value_field_try(Value value, Value *receiver, Identifier name)
 	}
 	Object *object = value_as_object(value);
 	for (size_t i = 0; i < object->field_cnt; i++) {
-		if (ident_eq(object->fields[i].name, name)) {
+		if (str_eq(object->fields[i].name, name)) {
 			// We found the field, set the receiver Object to the
 			// field's owner
 			receiver->gcvalue = &object->gcvalue;
@@ -1566,19 +1559,19 @@ value_field_try(Value value, Value *receiver, Identifier name)
 }
 
 Value *
-value_field(ErrorContext *ec, Value value, Value *receiver, Identifier name)
+value_field(ErrorContext *ec, Value value, Value *receiver, Str name)
 {
 	Value *field = value_field_try(value, receiver, name);
 	if (!field) {
-		exec_error(ec, "failed to find field %.*s in object", (int)name.len, name.name);
+		exec_error(ec, "failed to find field %.*s in object", (int)name.len, name.str);
 	}
 	return field;
 }
 
 Value
-value_call_primitive_method(ErrorContext *ec, Value target, Identifier method, Value *arguments, size_t argument_cnt)
+value_call_primitive_method(ErrorContext *ec, Value target, Str method, Value *arguments, size_t argument_cnt)
 {
-	const u8 *method_name = method.name;
+	const u8 *method_name = method.str;
 	size_t method_name_len = method.len;
 	#define METHOD(name) \
 			if (sizeof(name) - 1 == method_name_len && memcmp(name, method_name, method_name_len) == 0) /* body*/
@@ -1652,7 +1645,7 @@ err:
 // Inspired by: http://www.craftinginterpreters.com/hash-tables.html
 
 typedef struct {
-	Identifier key;
+	Str key;
 	Value value;
 } Entry;
 
@@ -1685,15 +1678,15 @@ table_destroy(Table *table)
 }
 
 Entry *
-table_find_entry(Entry *entries, size_t capacity, Identifier key)
+table_find_entry(Entry *entries, size_t capacity, Str key)
 {
-	u64 hash = ident_hash(key);
+	u64 hash = str_hash(key);
 	// NOTE: We guarantee that the capacity is a power of two. The modulo
 	// operation thus simplifies to simple binary AND.
 	size_t mask = capacity - 1;
 	for (size_t index = hash & mask;; index = (index + 1) & mask) {
 		Entry *entry = &entries[index];
-		if (entry->key.name == NULL || ident_eq(entry->key, key)) {
+		if (entry->key.str == NULL || str_eq(entry->key, key)) {
 			return entry;
 		}
 	}
@@ -1707,7 +1700,7 @@ table_grow(Table *table)
 	Entry *entries = calloc(capacity, sizeof(*entries));
 	for (size_t i = 0; i < table->capacity; i++) {
 		Entry *old = &table->entries[i];
-		if (old->key.name == NULL) {
+		if (old->key.str == NULL) {
 			continue;
 		}
 		Entry *new = table_find_entry(entries, capacity, old->key);
@@ -1719,26 +1712,26 @@ table_grow(Table *table)
 }
 
 Value *
-table_get(Table *table, Identifier key)
+table_get(Table *table, Str key)
 {
 	if (table->entry_cnt == 0) {
 		return NULL;
 	}
 	Entry *entry = table_find_entry(table->entries, table->capacity, key);
-	if (entry->key.name == NULL) {
+	if (entry->key.str == NULL) {
 		return NULL;
 	}
 	return &entry->value;
 }
 
 bool
-table_insert(Table *table, Identifier key, Value value)
+table_insert(Table *table, Str key, Value value)
 {
 	if (table->entry_cnt + 1 >= table->capacity / 2) {
 		table_grow(table);
 	}
 	Entry *entry = table_find_entry(table->entries, table->capacity, key);
-	bool new = entry->key.name == NULL;
+	bool new = entry->key.str == NULL;
 	if (new) {
 		table->entry_cnt += 1;
 		entry->key = key;
@@ -1776,13 +1769,13 @@ env_destroy(Environment *env)
 }
 
 void
-env_define(Environment *env, Identifier name, Value value)
+env_define(Environment *env, Str name, Value value)
 {
 	table_insert(&env->env, name, value);
 }
 
 Value *
-env_lookup_raw(Environment *env, Identifier name)
+env_lookup_raw(Environment *env, Str name)
 {
 	if (!env) {
 		return NULL;
@@ -1795,7 +1788,7 @@ env_lookup_raw(Environment *env, Identifier name)
 }
 
 Value *
-env_lookup(InterpreterState *is, Identifier name)
+env_lookup(InterpreterState *is, Str name)
 {
 	Value *lvalue = env_lookup_raw(is->env, name);
 	if (!lvalue) {
@@ -1809,7 +1802,7 @@ env_lookup(InterpreterState *is, Identifier name)
 	return lvalue;
 }
 
-static Value interpreter_call_method(InterpreterState *is, Value object, bool function_call, Identifier method, Ast **ast_arguments, size_t argument_cnt);
+static Value interpreter_call_method(InterpreterState *is, Value object, bool function_call, Str method, Ast **ast_arguments, size_t argument_cnt);
 
 static Value
 interpret(InterpreterState *is, Ast *ast)
@@ -1887,13 +1880,13 @@ interpret(InterpreterState *is, Ast *ast)
 	case AST_INDEX_ACCESS: {
 		AstIndexAccess *index_access = (AstIndexAccess *) ast;
 		Value object = interpret(is, index_access->object);
-		return interpreter_call_method(is, object, false, GET, &index_access->index, 1);
+		return interpreter_call_method(is, object, false, STR("get"), &index_access->index, 1);
 	}
 	case AST_INDEX_ASSIGNMENT: {
 		AstIndexAssignment *index_assignment = (AstIndexAssignment *) ast;
 		Value object = interpret(is, index_assignment->object);
 		Ast *arguments[2] = {index_assignment->index, index_assignment->value};
-		return interpreter_call_method(is, object, false, SET, &arguments[0], 2);
+		return interpreter_call_method(is, object, false, STR("set"), &arguments[0], 2);
 	}
 
 	case AST_FIELD_ACCESS: {
@@ -1913,7 +1906,7 @@ interpret(InterpreterState *is, Ast *ast)
 	case AST_FUNCTION_CALL: {
 		AstFunctionCall *function_call = (AstFunctionCall *) ast;
 		Value function = interpret(is, function_call->function);
-		return interpreter_call_method(is, function, true, EMPTY, function_call->arguments, function_call->argument_cnt);
+		return interpreter_call_method(is, function, true, STR(""), function_call->arguments, function_call->argument_cnt);
 	}
 	case AST_METHOD_CALL: {
 		AstMethodCall *method_call = (AstMethodCall *) ast;
@@ -1972,7 +1965,7 @@ interpret(InterpreterState *is, Ast *ast)
 }
 
 static Value
-interpreter_call_method(InterpreterState *is, Value object, bool function_call, Identifier method, Ast **ast_arguments, size_t argument_cnt)
+interpreter_call_method(InterpreterState *is, Value object, bool function_call, Str method, Ast **ast_arguments, size_t argument_cnt)
 {
 	Value return_value;
 	Value *arguments = calloc(argument_cnt, sizeof(*arguments));
@@ -2004,7 +1997,7 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 			env_define(is->env, function->parameters[i], arguments[i]);
 		}
 		if (!function_call) {
-			env_define(is->env, THIS, object);
+			env_define(is->env, STR("this"), object);
 		}
 		return_value = interpret(is, function->body);
 		env_destroy(is->env);
@@ -2105,7 +2098,7 @@ typedef struct {
 	union {
 		bool boolean;
 		i32 integer;
-		Identifier string;
+		Str string;
 		u16 slot;
 		CMethod method;
 		Class class;
@@ -2150,7 +2143,7 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 		break;
 	case CK_STRING:
 		constant->string.len = read_u32(input);
-		constant->string.name = *input;
+		constant->string.str = *input;
 		*input += constant->string.len;
 		break;
 	case CK_METHOD:
@@ -2210,7 +2203,7 @@ vm_pop_value(VM *vm)
 	return vm->stack[vm->stack_pos--];
 }
 
-static Identifier
+static Str
 constant_string(VM *vm, u8 **ip)
 {
 	u16 constant_index = read_u16(ip);
@@ -2323,26 +2316,26 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_GET_GLOBAL: {
-			Identifier name = constant_string(vm, &ip);
+			Str name = constant_string(vm, &ip);
 			Value *lvalue = value_field(vm->ec, vm->global, &vm->global, name);
 			vm->stack[++vm->stack_pos] = *lvalue;
 			break;
 		}
 		case OP_SET_GLOBAL: {
-			Identifier name = constant_string(vm, &ip);
+			Str name = constant_string(vm, &ip);
 			Value *lvalue = value_field(vm->ec, vm->global, &vm->global, name);
 			*lvalue = vm->stack[vm->stack_pos];
 			break;
 		}
 		case OP_GET_FIELD: {
-			Identifier name = constant_string(vm, &ip);
+			Str name = constant_string(vm, &ip);
 			Value object = vm->stack[vm->stack_pos--];
 			Value *lvalue = value_field(vm->ec, object, &object, name);
 			vm->stack[++vm->stack_pos] = *lvalue;
 			break;
 		}
 		case OP_SET_FIELD: {
-			Identifier name = constant_string(vm, &ip);
+			Str name = constant_string(vm, &ip);
 			Value value = vm->stack[vm->stack_pos--];
 			Value object = vm->stack[vm->stack_pos--];
 			Value *lvalue = value_field(vm->ec, object, &object, name);
@@ -2376,7 +2369,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_CALL_METHOD: {
-			Identifier name = constant_string(vm, &ip);
+			Str name = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
 			Value *lobject = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
 			Value *method_value = value_field_try(*lobject, lobject, name);
@@ -2392,7 +2385,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_PRINT: {
-			Identifier format_string = constant_string(vm, &ip);
+			Str format_string = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
 			Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
 			builtin_print(vm->ec, format_string, arguments, argument_cnt);
@@ -2479,7 +2472,7 @@ add_constant(CompilerState *cs, Constant constant)
 }
 
 static u16
-add_string(CompilerState *cs, Identifier name)
+add_string(CompilerState *cs, Str name)
 {
 	return add_constant(cs, (Constant) {
 	       .kind = CK_STRING,
@@ -2494,7 +2487,7 @@ inst_constant(CompilerState *cs, Constant constant)
 }
 
 static void
-inst_string(CompilerState *cs, Identifier name)
+inst_string(CompilerState *cs, Str name)
 {
 	inst_write_u16(cs, add_string(cs, name));
 }
@@ -2520,14 +2513,14 @@ op_index(CompilerState *cs, OpCode op, u16 index)
 }
 
 static void
-op_string(CompilerState *cs, OpCode op, Identifier string)
+op_string(CompilerState *cs, OpCode op, Str string)
 {
 	inst_write_u8(cs, op);
 	inst_string(cs, string);
 }
 
 static void
-op_string_cnt(CompilerState *cs, OpCode op, Identifier string, u8 count)
+op_string_cnt(CompilerState *cs, OpCode op, Str string, u8 count)
 {
 	inst_write_u8(cs, op);
 	inst_string(cs, string);
@@ -2625,17 +2618,17 @@ compile(CompilerState *cs, Ast *ast)
 		size_t condition = inst_pos(cs);
 		op_index(cs, OP_GET_LOCAL, i_var);
 		op_index(cs, OP_GET_LOCAL, size_var);
-		op_string_cnt(cs, OP_CALL_METHOD, LESS, 2);
+		op_string_cnt(cs, OP_CALL_METHOD, STR("<"), 2);
 		jump(cs, OP_BRANCH, &condition_to_init);
 		jump(cs, OP_JUMP, &condition_to_after);
 		size_t init = inst_pos(cs);
 		op_index(cs, OP_GET_LOCAL, i_var);
 		compile(cs, array->initializer);
-		op_string_cnt(cs, OP_CALL_METHOD, SET, 3);
+		op_string_cnt(cs, OP_CALL_METHOD, STR("set"), 3);
 		op(cs, OP_DROP);
 		op_index(cs, OP_GET_LOCAL, i_var);
 		literal(cs, (Constant) { .kind = CK_INTEGER, .integer = 1 });
-		op_string_cnt(cs, OP_CALL_METHOD, PLUS, 2);
+		op_string_cnt(cs, OP_CALL_METHOD, STR("+"), 2);
 		op_index(cs, OP_SET_LOCAL, i_var);
 		op(cs, OP_DROP);
 		op_index(cs, OP_GET_LOCAL, array_var);
@@ -2691,7 +2684,7 @@ compile(CompilerState *cs, Ast *ast)
 		cs->in_object = false;
 
 		cs->env = env_create(cs->env);
-		env_define(cs->env, THIS, make_integer(cs->local_cnt));
+		env_define(cs->env, STR("this"), make_integer(cs->local_cnt));
 		cs->local_cnt += 1;
 		for (size_t i = 0; i < function->parameter_cnt; i++) {
 			env_define(cs->env, function->parameters[i], make_integer(cs->local_cnt));
@@ -2763,7 +2756,7 @@ compile(CompilerState *cs, Ast *ast)
 		AstIndexAccess *index_access = (AstIndexAccess *) ast;
 		compile(cs, index_access->object);
 		compile(cs, index_access->index);
-		op_string_cnt(cs, OP_CALL_METHOD, GET, 2);
+		op_string_cnt(cs, OP_CALL_METHOD, STR("get"), 2);
 		return;
 	}
 	case AST_INDEX_ASSIGNMENT: {
@@ -2771,7 +2764,7 @@ compile(CompilerState *cs, Ast *ast)
 		compile(cs, index_assignment->object);
 		compile(cs, index_assignment->index);
 		compile(cs, index_assignment->value);
-		op_string_cnt(cs, OP_CALL_METHOD, SET, 3);
+		op_string_cnt(cs, OP_CALL_METHOD, STR("set"), 3);
 		return;
 	}
 
@@ -2988,7 +2981,7 @@ write_constant(FILE *f, Constant *constant)
 		break;
 	case CK_STRING:
 		write_u32(f, constant->string.len);
-		fwrite(constant->string.name, constant->string.len, 1, f);
+		fwrite(constant->string.str, constant->string.len, 1, f);
 		break;
 	case CK_METHOD:
 		write_u8(f, constant->method.parameter_cnt);
@@ -3056,11 +3049,11 @@ write_ast_json_end(OutputState *os, int indent, bool first)
 	fprintf(os->f, "%*s}%s\n", indent - 4, "", first ? "" : ".base,");
 }
 void write_ast_json_field(OutputState *os, char *name, Ast *value, int indent);
-void write_ast_json_field_string(OutputState *os, char *name, Identifier string, int indent);
+void write_ast_json_field_string(OutputState *os, char *name, Str string, int indent);
 void write_ast_json_field_boolean(OutputState *os, char *name, bool value, int indent);
 void write_ast_json_field_integer(OutputState *os, char *name, i32 value, int indent);
 void write_ast_json_field_array(OutputState *os, char *name, Ast **values, size_t value_cnt, int indent);
-void write_ast_json_field_string_array(OutputState *os, char *name, Identifier *values, size_t value_cnt, int indent);
+void write_ast_json_field_string_array(OutputState *os, char *name, Str *values, size_t value_cnt, int indent);
 
 void
 write_ast_json(OutputState *os, Ast *ast, int indent, bool first)
@@ -3255,21 +3248,21 @@ write_ast_json_field(OutputState *os, char *name, Ast *value, int indent)
 }
 
 void
-write_ast_json_string(OutputState *os, Identifier string)
+write_ast_json_string(OutputState *os, Str string)
 {
-	fprintf(os->f, "(Identifier) { .name = (void *) \"");
+	fprintf(os->f, "STR(\"");
 	for (size_t i = 0; i < string.len; i++) {
-		u8 c = string.name[i];
+		u8 c = string.str[i];
 		if (c == '\\') {
 			fputc(c, os->f);
 		}
 		fputc(c, os->f);
 	}
-	fprintf(os->f, "\", .len = %zu }", string.len);
+	fprintf(os->f, "\")");
 }
 
 void
-write_ast_json_field_string(OutputState *os, char *name, Identifier value, int indent)
+write_ast_json_field_string(OutputState *os, char *name, Str value, int indent)
 {
 	write_ast_json_key(os, name, indent);
 	write_ast_json_string(os, value);
@@ -3312,9 +3305,9 @@ write_ast_json_field_array(OutputState *os, char *name, Ast **values, size_t val
 }
 
 void
-write_ast_json_field_string_array(OutputState *os, char *name, Identifier *strings, size_t string_cnt, int indent)
+write_ast_json_field_string_array(OutputState *os, char *name, Str *strings, size_t string_cnt, int indent)
 {
-	write_ast_json_keys(os, name, "Identifier", indent);
+	write_ast_json_keys(os, name, "Str", indent);
 	if (string_cnt == 0) {
 		fprintf(os->f, "},\n");
 	} else {
