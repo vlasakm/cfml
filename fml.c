@@ -956,7 +956,7 @@ print(Parser *parser)
 	size_t formats = 0;
 	for (size_t i = 0; i < print->format.len; i++) {
 		switch (print->format.str[i]) {
-		case '\\': continue;
+		case '\\': i++; continue;
 		case '~': formats += 1;
 		}
 	}
