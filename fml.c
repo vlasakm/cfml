@@ -528,7 +528,7 @@ typedef enum {
 	AST_ARRAY,
 	AST_OBJECT,
 	AST_FUNCTION,
-	AST_DECLARATION,
+	AST_DEFINITION,
 	AST_VARIABLE_ACCESS,
 	AST_VARIABLE_ASSIGNMENT,
 	AST_INDEX_ACCESS,
@@ -537,8 +537,8 @@ typedef enum {
 	AST_FIELD_ASSIGNMENT,
 	AST_FUNCTION_CALL,
 	AST_METHOD_CALL,
-	AST_IF,
-	AST_WHILE,
+	AST_CONDITIONAL,
+	AST_LOOP,
 	AST_PRINT,
 	AST_BLOCK,
 	AST_TOP,
@@ -586,7 +586,7 @@ typedef struct {
 	Ast base;
 	Identifier name;
 	Ast *value;
-} AstDeclaration;
+} AstDefinition;
 
 typedef struct {
 	Ast base;
@@ -882,7 +882,7 @@ block(Parser *parser)
 static Ast *
 let(Parser *parser)
 {
-	AST_CREATE(AstDeclaration, declaration, parser->arena, AST_DECLARATION);
+	AST_CREATE(AstDefinition, declaration, parser->arena, AST_DEFINITION);
 	eat(parser, TK_LET);
 	eat_identifier(parser, &declaration->name);
 	eat(parser, TK_EQUAL);
@@ -917,7 +917,7 @@ object(Parser *parser)
 	eat(parser, TK_BEGIN);
 	expression_list(parser, &object->members, &object->member_cnt, TK_SEMICOLON, TK_END);
 	for (size_t i = 0; i < object->member_cnt; i++) {
-		if (object->members[i]->kind != AST_DECLARATION) {
+		if (object->members[i]->kind != AST_DEFINITION) {
 			parser_error(parser, object_tok, "Found object member that is not a declaration");
 		}
 	}
@@ -927,7 +927,7 @@ object(Parser *parser)
 static Ast *
 cond(Parser *parser)
 {
-	AST_CREATE(AstConditional, conditional, parser->arena, AST_IF);
+	AST_CREATE(AstConditional, conditional, parser->arena, AST_CONDITIONAL);
 	eat(parser, TK_IF);
 	conditional->condition = expression(parser);
 	eat(parser, TK_THEN);
@@ -943,7 +943,7 @@ cond(Parser *parser)
 static Ast *
 loop(Parser *parser)
 {
-	AST_CREATE(AstLoop, loop, parser->arena, AST_WHILE);
+	AST_CREATE(AstLoop, loop, parser->arena, AST_LOOP);
 	eat(parser, TK_WHILE);
 	loop->condition = expression(parser);
 	eat(parser, TK_DO);
@@ -995,7 +995,7 @@ function(Parser *parser)
 	Ast *ast = &function->base;
 	eat(parser, TK_FUNCTION);
 	if (tok_is_identifier(peek(parser))) {
-		AST_CREATE(AstDeclaration, declaration, parser->arena, AST_DECLARATION);
+		AST_CREATE(AstDefinition, declaration, parser->arena, AST_DEFINITION);
 		eat_identifier(parser, &declaration->name);
 		declaration->value = &function->base;
 		ast = &declaration->base;
@@ -1848,8 +1848,8 @@ interpret(InterpreterState *is, Ast *ast)
 		for (size_t i = 0; i < object->member_cnt; i++) {
 			Ast *ast_member = object->members[i];
 			switch (ast_member->kind) {
-			case AST_DECLARATION: {
-				AstDeclaration *declaration = (AstDeclaration *) ast_member;
+			case AST_DEFINITION: {
+				AstDefinition *declaration = (AstDefinition *) ast_member;
 				object_obj->fields[i].name = declaration->name;
 				object_obj->fields[i].value = interpret(is, declaration->value);
 				break;
@@ -1865,8 +1865,8 @@ interpret(InterpreterState *is, Ast *ast)
 		return make_function_ast(function);
 	}
 
-	case AST_DECLARATION: {
-		AstDeclaration *declaration = (AstDeclaration *) ast;
+	case AST_DEFINITION: {
+		AstDefinition *declaration = (AstDefinition *) ast;
 		Value value = interpret(is, declaration->value);
 		env_define(is->env, declaration->name, value);
 		return value;
@@ -1921,7 +1921,7 @@ interpret(InterpreterState *is, Ast *ast)
 		return interpreter_call_method(is, object, false, method_call->name, method_call->arguments, method_call->argument_cnt);
 	}
 
-	case AST_IF: {
+	case AST_CONDITIONAL: {
 		AstConditional *conditional = (AstConditional *) ast;
 		Value condition = interpret(is, conditional->condition);
 		if (value_to_bool(condition)) {
@@ -1930,7 +1930,7 @@ interpret(InterpreterState *is, Ast *ast)
 			return interpret(is, conditional->alternative);
 		}
 	}
-	case AST_WHILE: {
+	case AST_LOOP: {
 		AstLoop *loop = (AstLoop *) ast;
 		while (value_to_bool(interpret(is, loop->condition))) {
 			interpret(is, loop->body);
@@ -2655,7 +2655,7 @@ compile(CompilerState *cs, Ast *ast)
 		for (size_t i = 0; i < object->member_cnt; i++) {
 			Ast *ast_member = object->members[i];
 			switch (ast_member->kind) {
-			case AST_DECLARATION:
+			case AST_DEFINITION:
 				compile(cs, ast_member);
 				break;
 			default: UNREACHABLE();
@@ -2720,8 +2720,8 @@ compile(CompilerState *cs, Ast *ast)
 		return;
 	}
 
-	case AST_DECLARATION: {
-		AstDeclaration *declaration = (AstDeclaration *) ast;
+	case AST_DEFINITION: {
+		AstDefinition *declaration = (AstDefinition *) ast;
 		compile(cs, declaration->value);
 		if (cs->in_object || !cs->in_block) {
 			u16 name = add_string(cs, declaration->name);
@@ -2809,7 +2809,7 @@ compile(CompilerState *cs, Ast *ast)
 		return;
 	}
 
-	case AST_IF: {
+	case AST_CONDITIONAL: {
 		AstConditional *conditional = (AstConditional *) ast;
 		size_t cond_to_consequent;
 		size_t cond_to_alternative;
@@ -2829,7 +2829,7 @@ compile(CompilerState *cs, Ast *ast)
 		jump_fixup(cs, consequent_to_after, inst_pos(cs));
 		return;
 	}
-	case AST_WHILE: {
+	case AST_LOOP: {
 		AstLoop *loop = (AstLoop *) ast;
 		size_t condition_to_body;
 		size_t condition_to_after;
@@ -3028,7 +3028,7 @@ const char *ast_kind_repr[] = {
 	"AST_ARRAY",
 	"AST_OBJECT",
 	"AST_FUNCTION",
-	"AST_DECLARATION",
+	"AST_DEFINITION",
 	"AST_VARIABLE_ACCESS",
 	"AST_VARIABLE_ASSIGNMENT",
 	"AST_INDEX_ACCESS",
@@ -3037,8 +3037,8 @@ const char *ast_kind_repr[] = {
 	"AST_FIELD_ASSIGNMENT",
 	"AST_FUNCTION_CALL",
 	"AST_METHOD_CALL",
-	"AST_IF",
-	"AST_WHILE",
+	"AST_CONDITIONAL",
+	"AST_LOOP",
 	"AST_PRINT",
 	"AST_BLOCK",
 	"AST_TOP",
@@ -3113,9 +3113,9 @@ write_ast_json(OutputState *os, Ast *ast, int indent, bool first)
 		return;
 	}
 
-	case AST_DECLARATION: {
-		AstDeclaration *declaration = (AstDeclaration *) ast;
-		write_ast_json_begin(os, "Declaration", ast->kind, indent, first);
+	case AST_DEFINITION: {
+		AstDefinition *declaration = (AstDefinition *) ast;
+		write_ast_json_begin(os, "Definition", ast->kind, indent, first);
 		write_ast_json_field_string(os, "name", declaration->name, indent);
 		write_ast_json_field(os, "value", declaration->value, indent);
 		write_ast_json_end(os, indent, first);
@@ -3192,18 +3192,18 @@ write_ast_json(OutputState *os, Ast *ast, int indent, bool first)
 		return;
 	}
 
-	case AST_IF: {
+	case AST_CONDITIONAL: {
 		AstConditional *conditional = (AstConditional *) ast;
-		write_ast_json_begin(os, "If", ast->kind, indent, first);
+		write_ast_json_begin(os, "Conditional", ast->kind, indent, first);
 		write_ast_json_field(os, "condition", conditional->condition, indent);
 		write_ast_json_field(os, "consequent", conditional->consequent, indent);
 		write_ast_json_field(os, "alternative", conditional->alternative, indent);
 		write_ast_json_end(os, indent, first);
 		return;
 	}
-	case AST_WHILE: {
+	case AST_LOOP: {
 		AstLoop *loop = (AstLoop *) ast;
-		write_ast_json_begin(os, "While", ast->kind, indent, first);
+		write_ast_json_begin(os, "Loop", ast->kind, indent, first);
 		write_ast_json_field(os, "condition", loop->condition, indent);
 		write_ast_json_field(os, "body", loop->body, indent);
 		write_ast_json_end(os, indent, first);
