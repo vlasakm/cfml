@@ -2583,7 +2583,6 @@ static void
 jump_fixup(CompilerState *cs, size_t pos, size_t target)
 {
 	int diff = target - (pos + 2);
-	assert(diff <= INT16_MAX && diff >= INT16_MIN);
 	if (diff > INT16_MAX || diff < INT16_MIN) {
 		error(cs->ec, NULL, "compile", true, "Jump offset too large (%d, allowed %d to %d)", diff, INT16_MIN, INT16_MAX);
 	}
