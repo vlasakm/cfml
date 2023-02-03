@@ -1563,7 +1563,18 @@ value_field(ErrorContext *ec, Value value, Value *receiver, Str name)
 {
 	Value *field = value_field_try(value, receiver, name);
 	if (!field) {
-		exec_error(ec, "failed to find field %.*s in object", (int)name.len, name.str);
+		exec_error(ec, "failed to find field '%.*s' in object", (int)name.len, name.str);
+	}
+	return field;
+}
+
+Value *
+value_method_try(ErrorContext *ec, Value value, Value *receiver, Str name)
+{
+	bool was_object = value_is_object(value);
+	Value *field = value_field_try(value, receiver, name);
+	if (was_object && value_is_null(*receiver)) {
+		exec_error(ec, "undefined method '%.*s' for object", (int)name.len, name.str);
 	}
 	return field;
 }
@@ -1981,7 +1992,7 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 		}
 		function = value_as_function_ast(object);
 	} else {
-		Value *function_value = value_field_try(object, &object, method);
+		Value *function_value = value_method_try(is->ec, object, &object, method);
 		function = function_value ? value_as_function_ast(*function_value) : NULL;
 	}
 	if (function) {
@@ -2396,7 +2407,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Str name = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
 			Value *lobject = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
-			Value *method_value = value_field_try(*lobject, lobject, name);
+			Value *method_value = value_method_try(vm->ec, *lobject, lobject, name);
 			if (method_value) {
 				u16 method_index = value_as_function_bc(*method_value);
 				vm_call_method(vm, method_index, argument_cnt);
