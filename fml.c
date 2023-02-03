@@ -2096,7 +2096,7 @@ typedef struct {
 	u8 parameter_cnt;
 	u8 *instruction_start;
 	size_t instruction_len;
-} CMethod;
+} CFunction;
 
 typedef struct {
 	// Can't be u16 * due to alignment problems
@@ -2111,7 +2111,7 @@ typedef struct {
 		i32 integer;
 		Str string;
 		u16 slot;
-		CMethod method;
+		CFunction method;
 		Class class;
 	};
 } Constant;
@@ -2272,7 +2272,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 {
 	Constant *method_constant = &vm->program->constants[method_index];
 	assert(method_constant->kind == CK_METHOD);
-	CMethod *method = &method_constant->method;
+	CFunction *method = &method_constant->method;
 	assert(argument_cnt == method->parameter_cnt);
 
 	size_t local_cnt = argument_cnt + method->local_cnt;
@@ -2736,8 +2736,8 @@ compile(CompilerState *cs, Ast *ast)
 		u8 *instruction_start = move_to_arena(cs->arena, &cs->instructions, start, u8);
 		u16 method = add_constant(cs, (Constant) {
 		       .kind = CK_METHOD,
-		       .method = (CMethod) {
-				.local_cnt = cs->local_cnt - (function->parameter_cnt + 1),
+		       .method = (CFunction) {
+				.local_cnt = cs->local_cnt - function->parameter_cnt - 1,
 				.parameter_cnt = function->parameter_cnt + 1,
 				.instruction_start = instruction_start,
 				.instruction_len = instruction_len,
@@ -2945,7 +2945,7 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	u8 *instruction_start = move_to_arena(cs.arena, &cs.instructions, start, u8);
 	u16 entry_point = add_constant(&cs, (Constant) {
 	       .kind = CK_METHOD,
-	       .method = (CMethod) {
+	       .method = (CFunction) {
 			.local_cnt = cs.local_cnt,
 			.parameter_cnt = 0,
 			.instruction_start = instruction_start,
@@ -3404,8 +3404,8 @@ print_constant(Constant *constant, Program *program, FILE *f)
 		fprintf(f, "\"%.*s\"", (int) constant->string.len, constant->string.str);
 		break;
 	case CK_METHOD: {
-		CMethod *method = &constant->method;
-		fprintf(f, "Method(params: %"PRIi8", locals: %"PRIi8", size: %zu)\n", method->parameter_cnt, method->local_cnt, method->instruction_len);
+		CFunction *method = &constant->method;
+		fprintf(f, "Function(params: %"PRIi8", locals: %"PRIi8", length: %zu)\n", method->parameter_cnt, method->local_cnt, method->instruction_len);
 		u8 *start = method->instruction_start;
 		for (u8 *ip = start;;) {
 			fprintf(f, "%18zu: ", ip - start);
