@@ -2064,7 +2064,7 @@ read_u8(u8 **src)
 
 typedef enum {
 	CK_NULL = 0x01,
-	CK_BOOLEAN = 0x06,
+	CK_BOOLEAN = 0x04,
 	CK_INTEGER = 0x00,
 	CK_STRING = 0x02,
 	CK_METHOD = 0x03,
