@@ -2029,6 +2029,7 @@ interpret_ast(ErrorContext *ec, Ast *ast)
 		.env = env,
 		.global_env = env,
 	};
+	env_define(is.env, STR("this"), make_null());
 	interpret(&is, ast);
 	env_destroy(env);
 }
@@ -2457,7 +2458,9 @@ vm_run(ErrorContext *ec, Program *program)
 		.bp = 0,
 	};
 	vm.global = vm_instantiate_class(&vm, &program->global_class, make_null_vm);
-	vm_call_method(&vm, program->entry_point, 0);
+	// push `this` as an argument
+	vm.stack[++vm.stack_pos] = make_null();
+	vm_call_method(&vm, program->entry_point, 1);
 	// Check that the program left exactly one value on the stack
 	assert(vm.stack_pos == 0);
 }
@@ -2930,7 +2933,7 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 		.members = {0},
 		.in_object = false,
 		.in_block = false,
-		.env = NULL,
+		.env = env_create(NULL),
 		.local_cnt = 0,
 	};
 	garena_init(&cs.constants);
@@ -2938,6 +2941,7 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	garena_init(&cs.members);
 
 	size_t start = garena_save(&cs.instructions);
+	env_define(cs.env, STR("this"), make_integer(cs.local_cnt++));
 	compile(&cs, ast);
 	op(&cs, OP_RETURN);
 
@@ -2946,8 +2950,8 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	u16 entry_point = add_constant(&cs, (Constant) {
 	       .kind = CK_METHOD,
 	       .method = (CFunction) {
-			.local_cnt = cs.local_cnt,
-			.parameter_cnt = 0,
+			.local_cnt = cs.local_cnt - 1,
+			.parameter_cnt = 1,
 			.instruction_start = instruction_start,
 			.instruction_len = instruction_len,
 		},
@@ -2965,6 +2969,7 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 
 	program->entry_point = entry_point;
 
+	env_destroy(cs.env);
 	garena_destroy(&cs.constants);
 	garena_destroy(&cs.instructions);
 	garena_destroy(&cs.members);
