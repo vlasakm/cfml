@@ -115,12 +115,13 @@ arena_vaprintf(Arena *arena, const char *fmt, va_list ap)
 	void *mem = &arena->current->mem[arena->current->pos];
 	int len = vsnprintf(mem, available, fmt, ap);
 	assert(len >= 0);
-	len += 1;
+	len += 1; // terminating null
 	if ((size_t) len <= available) {
 		arena->current->pos += (size_t) len;
+	} else {
 		va_copy(ap, ap_orig);
 		mem = arena_alloc(arena, (size_t) len);
-		len = vsnprintf(mem, (size_t) len, fmt, ap);
+		vsnprintf(mem, (size_t) len, fmt, ap);
 	}
 	va_end(ap_orig);
 	return mem;
@@ -149,11 +150,11 @@ garena_destroy(GArena *arena)
 void *
 garena_alloc(GArena *arena, size_t size, size_t alignment)
 {
-	if (arena->pos + size > arena->capacity) {
+	size_t pos = (arena->pos + (alignment - 1)) & ~(alignment - 1);
+	if (pos + size > arena->capacity) {
 		arena->capacity = arena->capacity ? arena->capacity * 2 : size * 8;
 		arena->mem = realloc(arena->mem, arena->capacity);
 	}
-	size_t pos = (arena->pos + (alignment - 1)) & ~(alignment - 1);
 	arena->pos = pos + size;
 	return &arena->mem[pos];
 }
