@@ -2137,6 +2137,15 @@ typedef struct {
 } Program;
 
 static void
+bc_error(ErrorContext *ec, const char *msg, ...)
+{
+	va_list ap;
+	va_start(ap, msg);
+	verror(ec, NULL, "bytecode", true, msg, ap);
+	va_end(ap);
+}
+
+static void
 read_class(u8 **input, Class *class)
 {
 	class->member_cnt = read_u16(input);
@@ -2181,7 +2190,7 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 	case CK_BOOLEAN: {
 		u8 b = read_u8(input);
 		if (b > 1) {
-			error(ec, NULL, "bytecode", true, "Boolean is %d not 0 or 1", (int) b);
+			bc_error(ec, "Boolean is %d not 0 or 1", (int) b);
 		}
 		constant->boolean = b == 1;
 		break;
@@ -2206,14 +2215,16 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 		break;
 	}
 	default:
-		error(ec, NULL, "bytecode", true, "Invalid constant tag '%d'", (int) kind);
+		bc_error(ec, "Invalid constant tag '%d'", (int) kind);
 	}
 }
 
 static bool
 read_program(ErrorContext *ec, Arena *arena, Program *program, u8 *input, size_t input_len)
 {
-	assert(input_len >= 2);
+	if (input_len < 6) {
+		bc_error(ec, "The bytecode is too small (%zu bytes, need at least 6)", input_len);
+	}
 	program->constant_cnt = read_u16(&input);
 	program->constants = arena_alloc(arena, program->constant_cnt * sizeof(*program->constants));
 	for (size_t i = 0; i < program->constant_cnt; i++) {
