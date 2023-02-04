@@ -30,58 +30,54 @@ unreachable(char *file, size_t line)
 	exit(EXIT_FAILURE);
 }
 
+static size_t
+align(size_t pos, size_t alignment)
+{
+	return (pos + (alignment - 1)) & ~(alignment - 1);
+}
+
 typedef struct ArenaChunk ArenaChunk;
 
 struct ArenaChunk {
 	size_t size;
 	size_t pos;
 	ArenaChunk *prev;
-	alignas(u64) u8 mem[];
+	//u8 mem[];
 };
 
 typedef struct {
 	ArenaChunk *current;
 	size_t prev_size_sum;
+	ArenaChunk dummy;
 } Arena;
 
 void
 arena_init(Arena *arena)
 {
-	size_t size = 1024;
-	ArenaChunk *chunk = malloc(sizeof(ArenaChunk) + size);
-	chunk->prev = NULL;
-	chunk->size = size;
-	chunk->pos = 0;
+	ArenaChunk *chunk = &arena->dummy;
 	arena->current = chunk;
 	arena->prev_size_sum = 0;
-}
-
-void
-arena_destroy(Arena *arena)
-{
-	ArenaChunk *chunk = arena->current;
-	while (chunk) {
-		ArenaChunk *prev = chunk->prev;
-		free(chunk);
-		chunk = prev;
-	}
+	chunk->size = 0;
+	chunk->pos = 0;
+	chunk->prev = NULL;
 }
 
 void *
 arena_alloc(Arena *arena, size_t size)
 {
-	if (arena->current->pos + size > arena->current->size) {
-		arena->prev_size_sum += arena->current->size;
-		size_t new_size = size + arena->current->size * 2;
-		ArenaChunk *new = malloc(sizeof(ArenaChunk) + new_size);
+	size_t pos = align(arena->current->pos, 8);
+	size_t current_size = arena->current->size;
+	if (pos + size > current_size) {
+		arena->prev_size_sum += current_size;
+		size_t new_size = size + (current_size ? current_size * 2 : 1024);
+		ArenaChunk *new = malloc(new_size);
 		new->size = new_size;
-		new->pos = 0;
 		new->prev = arena->current;
 		arena->current = new;
+		pos = align(sizeof(ArenaChunk), 8);
 	}
-	size_t pos = (arena->current->pos + 7) & ~7;
 	arena->current->pos = pos + size;
-	return &arena->current->mem[pos];
+	return ((u8 *) arena->current) + pos;
 }
 
 size_t
@@ -104,6 +100,15 @@ arena_restore(Arena *arena, size_t pos)
 	arena->current = chunk;
 }
 
+void
+arena_destroy(Arena *arena)
+{
+	arena_restore(arena, 0);
+	free(arena->current);
+	arena->current = &arena->dummy;
+}
+
+
 u8 *
 arena_vaprintf(Arena *arena, const char *fmt, va_list ap)
 {
@@ -112,7 +117,7 @@ arena_vaprintf(Arena *arena, const char *fmt, va_list ap)
 	va_copy(ap_orig, ap);
 
 	size_t available = arena->current->size - arena->current->pos;
-	void *mem = &arena->current->mem[arena->current->pos];
+	void *mem = ((u8 *) arena->current) + arena->current->pos;
 	int len = vsnprintf(mem, available, fmt, ap);
 	assert(len >= 0);
 	len += 1; // terminating null
@@ -150,7 +155,7 @@ garena_destroy(GArena *arena)
 void *
 garena_alloc(GArena *arena, size_t size, size_t alignment)
 {
-	size_t pos = (arena->pos + (alignment - 1)) & ~(alignment - 1);
+	size_t pos = align(arena->pos, alignment);
 	if (pos + size > arena->capacity) {
 		arena->capacity = arena->capacity ? arena->capacity * 2 : size * 8;
 		arena->mem = realloc(arena->mem, arena->capacity);
@@ -185,15 +190,15 @@ garena_mem(GArena *arena)
 
 #define move_to_arena(arena, garena, start, type) move_to_arena_((arena), (garena), (start), alignof(type))
 void *
-move_to_arena_(Arena *arena, GArena *garena, size_t start, size_t align)
+move_to_arena_(Arena *arena, GArena *garena, size_t start, size_t alignment)
 {
 	size_t size = garena->pos - start;
 	if (size == 0) {
 		return NULL;
 	}
 	garena_restore(garena, start);
-	// "alloc 0 bytes" to get the alignment right
-	void *old = garena_alloc(garena, 0, align);
+	// be careful to realign `start`
+	void *old = &garena->mem[align(start, alignment)];
 	return memcpy(arena_alloc(arena, size), old, size);
 }
 
