@@ -2279,9 +2279,21 @@ make_null_vm(VM *vm)
 }
 
 static Value
-vm_pop_value(VM *vm)
+vm_pop(VM *vm)
 {
+	// beware of the unintuitive check below due to unsigned integer
+	// wrap around
+	assert(vm->stack_pos <= vm->stack_len);
 	return vm->stack[vm->stack_pos--];
+}
+
+static void
+vm_push(VM *vm, Value value)
+{
+	if (vm->stack_pos + 1 >= vm->stack_len) {
+		exec_error(vm->ec, "Operand stack space exhausted");
+	}
+	vm->stack[++vm->stack_pos] = value;
 }
 
 static Str
@@ -2319,7 +2331,9 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 	Constant *method_constant = &vm->program->constants[method_index];
 	assert(method_constant->kind == CK_METHOD);
 	CFunction *method = &method_constant->method;
-	assert(argument_cnt == method->parameter_cnt);
+	if (argument_cnt != method->parameter_cnt) {
+		exec_error(vm->ec, "Wrong number of arguments: %zu expected, got %zu", method->parameter_cnt, argument_cnt);
+	}
 
 	size_t local_cnt = argument_cnt + method->local_cnt;
 	size_t saved_bp = vm->bp;
@@ -2355,12 +2369,12 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			default:
 				assert(false);
 			}
-			vm->stack[++vm->stack_pos] = value;
+			vm_push(vm, value);
 			break;
 		}
 		case OP_ARRAY: {
-			Value initializer = vm->stack[vm->stack_pos--];
-			Value size_value = vm->stack[vm->stack_pos--];
+			Value initializer = vm_pop(vm);
+			Value size_value = vm_pop(vm);
 			size_t size = value_as_size(vm->ec, size_value);
 			Value array_value = make_array(size);
 			Array *array = value_as_array(array_value);
@@ -2374,8 +2388,8 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			u16 constant_index = read_u16(&ip);
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_CLASS);
-			Value object = vm_instantiate_class(vm, &constant->class, vm_pop_value);
-			vm->stack[++vm->stack_pos] = object;
+			Value object = vm_instantiate_class(vm, &constant->class, vm_pop);
+			vm_push(vm, object);
 			break;
 		}
 		case OP_FUNCTION: {
@@ -2383,12 +2397,12 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Constant *constant = &vm->program->constants[constant_index];
 			assert(constant->kind == CK_METHOD);
 			Value function = make_function_bc(constant_index);
-			vm->stack[++vm->stack_pos] = function;
+			vm_push(vm, function);
 			break;
 		}
 		case OP_GET_LOCAL: {
 			u16 local_index = read_u16(&ip);
-			vm->stack[++vm->stack_pos] = locals[local_index];
+			vm_push(vm, locals[local_index]);
 			break;
 		}
 		case OP_SET_LOCAL: {
@@ -2399,7 +2413,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		case OP_GET_GLOBAL: {
 			Str name = constant_string(vm, &ip);
 			Value *lvalue = value_field(vm->ec, vm->global, &vm->global, name);
-			vm->stack[++vm->stack_pos] = *lvalue;
+			vm_push(vm, *lvalue);
 			break;
 		}
 		case OP_SET_GLOBAL: {
@@ -2410,18 +2424,18 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		}
 		case OP_GET_FIELD: {
 			Str name = constant_string(vm, &ip);
-			Value object = vm->stack[vm->stack_pos--];
+			Value object = vm_pop(vm);
 			Value *lvalue = value_field(vm->ec, object, &object, name);
-			vm->stack[++vm->stack_pos] = *lvalue;
+			vm_push(vm, *lvalue);
 			break;
 		}
 		case OP_SET_FIELD: {
 			Str name = constant_string(vm, &ip);
-			Value value = vm->stack[vm->stack_pos--];
-			Value object = vm->stack[vm->stack_pos--];
+			Value value = vm_pop(vm);
+			Value object = vm_pop(vm);
 			Value *lvalue = value_field(vm->ec, object, &object, name);
 			*lvalue = value;
-			vm->stack[++vm->stack_pos] = value;
+			vm_push(vm, value);
 			break;
 		}
 		case OP_JUMP: {
@@ -2431,7 +2445,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		}
 		case OP_BRANCH: {
 			i16 offset = read_u16(&ip);
-			Value condition = vm->stack[vm->stack_pos--];
+			Value condition = vm_pop(vm);
 			if (value_to_bool(condition)) {
 				ip += offset;
 			}
@@ -2461,7 +2475,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 				Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 2)];
 				Value return_value = value_call_primitive_method(vm->ec, *lobject, name, arguments, argument_cnt - 1);
 				vm->stack_pos -= argument_cnt;
-				vm->stack[++vm->stack_pos] = return_value;
+				vm_push(vm, return_value);
 			}
 			break;
 		}
@@ -2471,11 +2485,11 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
 			builtin_print(vm->ec, format_string, arguments, argument_cnt);
 			vm->stack_pos -= argument_cnt;
-			vm->stack[++vm->stack_pos] = make_null();
+			vm_push(vm, make_null());
 			break;
 		}
 		case OP_DROP: {
-			vm->stack_pos--;
+			vm_pop(vm);
 			break;
 		}
 		case OP_RETURN: {
