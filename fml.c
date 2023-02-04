@@ -1210,9 +1210,6 @@ typedef struct {
 		AstFunction *function;
 		// For BC interpreter.
 		u16 function_index;
-
-		// For BC compiler.
-		u16 local_index;
 	};
 } Value;
 
