@@ -2533,6 +2533,7 @@ typedef struct {
 	GArena members; // u16 array (but unaligned when serialized)
 	bool in_object;
 	bool in_block;
+	bool in_definition;
 	Environment *env;
 	u16 local_cnt;
 } CompilerState;
@@ -2744,9 +2745,11 @@ compile(CompilerState *cs, Ast *ast)
 		AstObject *object = (AstObject *) ast;
 		compile(cs, object->extends);
 		bool saved_in_object = cs->in_object;
+		bool saved_in_definition = cs->in_definition;
 		size_t start = garena_save(&cs->members);
 
 		cs->in_object = true;
+		cs->in_definition = false;
 		for (size_t i = 0; i < object->member_cnt; i++) {
 			Ast *ast_member = object->members[i];
 			switch (ast_member->kind) {
@@ -2771,6 +2774,7 @@ compile(CompilerState *cs, Ast *ast)
 			},
 		});
 		cs->in_object = saved_in_object;
+		cs->in_definition = saved_in_definition;
 		return;
 	}
 	case AST_FUNCTION: {
@@ -2815,12 +2819,17 @@ compile(CompilerState *cs, Ast *ast)
 
 	case AST_DEFINITION: {
 		AstDefinition *declaration = (AstDefinition *) ast;
+		bool saved_in_definition = cs->in_definition;
+		cs->in_definition = true;
 		compile(cs, declaration->value);
+		cs->in_definition = saved_in_definition;
 		if (cs->in_object || !cs->in_block) {
 			u16 name = add_string(cs, declaration->name);
 			garena_push_value(&cs->members, u16, name);
 			if (!cs->in_object) {
 				op_string(cs, OP_SET_GLOBAL, declaration->name);
+			} else if (cs->in_definition) {
+				error(cs->ec, NULL, "compile", true, "Nested definition in definition in object not allowed");
 			}
 		} else {
 			env_define(cs->env, declaration->name, make_integer(cs->local_cnt));
@@ -2992,6 +3001,7 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 		.members = {0},
 		.in_object = false,
 		.in_block = false,
+		.in_definition = false,
 		.env = env_create(NULL),
 		.local_cnt = 0,
 	};
