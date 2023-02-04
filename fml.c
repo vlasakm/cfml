@@ -1448,16 +1448,8 @@ value_print(Value value)
 				prev = true;
 			}
 			Field *fields = calloc(object->field_cnt, sizeof(*fields));
-			size_t field_cnt = 0;
 			for (size_t i = 0; i < object->field_cnt; i++) {
-				if (value_is_function(object->fields[i].value)) {
-					continue;
-				}
-				fields[field_cnt] = object->fields[i];
-				field_cnt += 1;
-			}
-
-			for (size_t i = 0; i < field_cnt; i++) {
+				fields[i] = object->fields[i];
 				for (size_t j = i; j > 0 && str_cmp(fields[j - 1].name, fields[j].name) > 0; j--) {
 					Field tmp = fields[j - 1];
 					fields[j - 1] = fields[j];
@@ -1465,7 +1457,7 @@ value_print(Value value)
 				}
 			}
 
-			for (size_t i = 0; i < field_cnt; i++) {
+			for (size_t i = 0; i < object->field_cnt; i++) {
 				if (prev) {
 					printf(", ");
 				}
@@ -1481,7 +1473,7 @@ value_print(Value value)
 		break;
 
 	case VK_FUNCTION:
-		printf("function '%p'", (void *) value.function);
+		printf("function");
 		break;
 	}
 }
