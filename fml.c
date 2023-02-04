@@ -2118,10 +2118,9 @@ typedef enum {
 } ConstantKind;
 
 typedef enum {
-	OP_LITERAL = 0x01,
+	OP_CONSTANT = 0x01,
 	OP_ARRAY = 0x03,
 	OP_OBJECT = 0x04,
-	OP_FUNCTION = 0x11,
 	OP_GET_LOCAL = 0x0A,
 	OP_SET_LOCAL = 0x09,
 	OP_GET_GLOBAL = 0x0C,
@@ -2133,7 +2132,7 @@ typedef enum {
 	OP_CALL_FUNCTION = 0x08,
 	OP_CALL_METHOD = 0x07,
 	OP_PRINT = 0x02,
-	OP_DROP = 0x10,
+	OP_DROP = 0x00,
 	OP_RETURN = 0x0F,
 } OpCode;
 
@@ -2364,7 +2363,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 
 	for (u8 *ip = method->instruction_start;;) {
 		switch (read_u8(&ip)) {
-		case OP_LITERAL: {
+		case OP_CONSTANT: {
 			u16 constant_index = read_u16(&ip);
 			Constant *constant = &vm->program->constants[constant_index];
 			Value value;
@@ -2377,6 +2376,9 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 				break;
 			case CK_INTEGER:
 				value = make_integer(constant->integer);
+				break;
+			case CK_FUNCTION:
+				value = make_function_bc(constant_index);
 				break;
 			default:
 				assert(false);
@@ -2402,14 +2404,6 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			assert(constant->kind == CK_CLASS);
 			Value object = vm_instantiate_class(vm, &constant->class, vm_pop);
 			vm_push(vm, object);
-			break;
-		}
-		case OP_FUNCTION: {
-			u16 constant_index = read_u16(&ip);
-			Constant *constant = &vm->program->constants[constant_index];
-			assert(constant->kind == CK_FUNCTION);
-			Value function = make_function_bc(constant_index);
-			vm_push(vm, function);
 			break;
 		}
 		case OP_GET_LOCAL: {
@@ -2611,7 +2605,7 @@ inst_string(CompilerState *cs, Str name)
 static void
 literal(CompilerState *cs, Constant constant)
 {
-	inst_write_u8(cs, OP_LITERAL);
+	inst_write_u8(cs, OP_CONSTANT);
 	inst_constant(cs, constant);
 }
 
@@ -2812,7 +2806,7 @@ compile(CompilerState *cs, Ast *ast)
 
 		size_t instruction_len = garena_cnt_from(&cs->instructions, u8, start);
 		u8 *instruction_start = move_to_arena(cs->arena, &cs->instructions, start, u8);
-		u16 method = add_constant(cs, (Constant) {
+		literal(cs, (Constant) {
 		       .kind = CK_FUNCTION,
 		       .method = (CFunction) {
 				.local_cnt = cs->local_cnt - function->parameter_cnt - 1,
@@ -2825,7 +2819,6 @@ compile(CompilerState *cs, Ast *ast)
 		cs->local_cnt = saved_local_cnt;
 		cs->in_block = saved_in_block;
 		cs->in_object = saved_in_object;
-		op_index(cs, OP_FUNCTION, method);
 		return;
 	}
 
@@ -3496,11 +3489,22 @@ print_constant(Constant *constant, Program *program, FILE *f)
 		for (u8 *ip = start;;) {
 			fprintf(f, "%18zu: ", ip - start);
 			switch (read_u8(&ip)) {
-			case OP_LITERAL: {
+			case OP_CONSTANT: {
 				u16 constant_index = read_u16(&ip);
 				Constant *constant = &program->constants[constant_index];
-				fprintf(f, "literal ");
-				print_constant(constant, program, f);
+				switch (constant->kind) {
+				case CK_NULL:
+				case CK_BOOLEAN:
+				case CK_INTEGER:
+					fprintf(f, "constant ");
+					print_constant(constant, program, f);
+					break;
+				case CK_FUNCTION:
+					fprintf(f, "function #%"PRIu16, constant_index);
+					break;
+				default:
+					assert(false);
+				}
 				break;
 			}
 			case OP_ARRAY: {
@@ -3510,13 +3514,6 @@ print_constant(Constant *constant, Program *program, FILE *f)
 			case OP_OBJECT: {
 				u16 constant_index = read_u16(&ip);
 				fprintf(f, "object #%"PRIu16, constant_index);
-				break;
-			}
-			case OP_FUNCTION: {
-				u16 constant_index = read_u16(&ip);
-				Constant *constant = &program->constants[constant_index];
-				assert(constant->kind == CK_FUNCTION);
-				fprintf(f, "function #%"PRIu16, constant_index);
 				break;
 			}
 			case OP_GET_LOCAL: {
