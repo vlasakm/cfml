@@ -2782,7 +2782,7 @@ compile(CompilerState *cs, Ast *ast)
 		bool saved_in_object = cs->in_object;
 
 		cs->local_cnt = 0;
-		cs->in_block = false;
+		cs->in_block = true;
 		cs->in_object = false;
 
 		cs->env = env_create(cs->env);
