@@ -1220,6 +1220,7 @@ typedef struct {
 
 struct GcValue {
 	GcValueKind kind;
+	GcValue *prev;
 };
 
 typedef struct {
@@ -1272,12 +1273,17 @@ make_integer(i32 value)
 	return (Value) { .kind = VK_INTEGER, .integer = value };
 }
 
+GcValue *last;
+
 Value
 make_array(size_t length)
 {
 	Array *array = malloc(sizeof(*array) + length * sizeof(array->values[0]));
 	array->gcvalue = (GcValue) { .kind = GK_ARRAY };
 	array->length = length;
+
+	array->gcvalue.prev = last;
+	last = &array->gcvalue;
 
 	return (Value) { .kind = VK_GCVALUE, .gcvalue = &array->gcvalue };
 }
@@ -1290,6 +1296,9 @@ make_object(size_t field_cnt)
 	// NOTE: Caller has to set parent!
 	//object->parent = make_null();
 	object->field_cnt = field_cnt;
+
+	object->gcvalue.prev = last;
+	last = &object->gcvalue;
 
 	return (Value) { .kind = VK_GCVALUE, .gcvalue = &object->gcvalue };
 }
@@ -3650,7 +3659,11 @@ end:
 		fprintf(stderr, "  %.*s\n", (int) (line_end - line_start), line_start);
 		fprintf(stderr, "  %*s\n", (int) (pos - line_start + 1), "^");
 	}
-
+	while (last) {
+		GcValue *prev = last->prev;
+		free(last);
+		last = prev;
+	}
 	arena_destroy(arena);
 	return ec.error_head ? EXIT_FAILURE : EXIT_SUCCESS;
 }
