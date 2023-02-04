@@ -2211,11 +2211,11 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 }
 
 static bool
-read_program(ErrorContext *ec, Program *program, u8 *input, size_t input_len)
+read_program(ErrorContext *ec, Arena *arena, Program *program, u8 *input, size_t input_len)
 {
 	assert(input_len >= 2);
 	program->constant_cnt = read_u16(&input);
-	program->constants = calloc(program->constant_cnt, sizeof(*program->constants));
+	program->constants = arena_alloc(arena, program->constant_cnt * sizeof(*program->constants));
 	for (size_t i = 0; i < program->constant_cnt; i++) {
 		read_constant(ec, &input, &program->constants[i]);
 	}
@@ -2226,6 +2226,7 @@ read_program(ErrorContext *ec, Program *program, u8 *input, size_t input_len)
 
 typedef struct {
 	ErrorContext *ec;
+	Arena *arena;
 	Program *program;
 	Value global;
 	Value *stack;
@@ -2455,16 +2456,17 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 }
 
 static void
-vm_run(ErrorContext *ec, Program *program)
+vm_run(ErrorContext *ec, Arena *arena, Program *program)
 {
 	VM vm = {
 		.ec = ec,
+		.arena = arena,
 		.program = program,
 		.global = make_null(),
-		.stack = calloc(1024, sizeof(Value)),
+		.stack = arena_alloc(arena, 1024 * sizeof(Value)),
 		.stack_pos = -1,
 		.stack_len = 1024,
-		.frame_stack = calloc(1024, sizeof(Value)),
+		.frame_stack = arena_alloc(arena, 1024 * sizeof(Value)),
 		.frame_stack_pos = 0,
 		.frame_stack_len = 1024,
 		.bp = 0,
@@ -3594,11 +3596,11 @@ main(int argc, char **argv) {
 		assert(ast);
 		Program program;
 		compile_ast(&ec, arena, &program, ast);
-		vm_run(&ec, &program);
+		vm_run(&ec, arena, &program);
 	} else if (strcmp(argv[1], "execute") == 0) {
 		Program program;
-		read_program(&ec, &program, buf, fsize);
-		vm_run(&ec, &program);
+		read_program(&ec, arena, &program, buf, fsize);
+		vm_run(&ec, arena, &program);
 	} else if (strcmp(argv[1], "compile") == 0) {
 		Ast *ast = parse(&ec, arena, buf, fsize);
 		assert(ast);
@@ -3622,11 +3624,11 @@ main(int argc, char **argv) {
 		fread(buf, fsize, 1, f);
 		fclose(f);
 		Program program2;
-		read_program(&ec, &program2, buf, fsize);
-		vm_run(&ec, &program2);
+		read_program(&ec, arena, &program2, buf, fsize);
+		vm_run(&ec, arena, &program2);
 	} else if (strcmp(argv[1], "disassemble") == 0) {
 		Program program;
-		read_program(&ec, &program, buf, fsize);
+		read_program(&ec, arena, &program, buf, fsize);
 		disassemble(&program, stdout);
 	} else if (strcmp(argv[1], "dump") == 0) {
 		Ast *ast = parse(&ec, arena, buf, fsize);
