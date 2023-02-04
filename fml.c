@@ -2113,7 +2113,7 @@ typedef enum {
 	CK_BOOLEAN = 0x04,
 	CK_INTEGER = 0x00,
 	CK_STRING = 0x02,
-	CK_METHOD = 0x03,
+	CK_FUNCTION = 0x03,
 	CK_CLASS = 0x05,
 } ConstantKind;
 
@@ -2204,7 +2204,7 @@ constant_eq(Constant *a, Constant *b)
 	case CK_STRING:
 		return str_eq(a->string, b->string);
 		break;
-	case CK_METHOD:
+	case CK_FUNCTION:
 		return false;
 	case CK_CLASS:
 		return false;
@@ -2236,7 +2236,7 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 		constant->string.str = *input;
 		*input += constant->string.len;
 		break;
-	case CK_METHOD:
+	case CK_FUNCTION:
 		constant->method.parameter_cnt = read_u8(input);
 		constant->method.local_cnt = read_u16(input);
 		constant->method.instruction_len = read_u32(input);
@@ -2341,7 +2341,7 @@ static void
 vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 {
 	Constant *method_constant = &vm->program->constants[method_index];
-	assert(method_constant->kind == CK_METHOD);
+	assert(method_constant->kind == CK_FUNCTION);
 	CFunction *method = &method_constant->method;
 	if (argument_cnt != method->parameter_cnt) {
 		exec_error(vm->ec, "Wrong number of arguments: %zu expected, got %zu", method->parameter_cnt, argument_cnt);
@@ -2407,7 +2407,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		case OP_FUNCTION: {
 			u16 constant_index = read_u16(&ip);
 			Constant *constant = &vm->program->constants[constant_index];
-			assert(constant->kind == CK_METHOD);
+			assert(constant->kind == CK_FUNCTION);
 			Value function = make_function_bc(constant_index);
 			vm_push(vm, function);
 			break;
@@ -2813,7 +2813,7 @@ compile(CompilerState *cs, Ast *ast)
 		size_t instruction_len = garena_cnt_from(&cs->instructions, u8, start);
 		u8 *instruction_start = move_to_arena(cs->arena, &cs->instructions, start, u8);
 		u16 method = add_constant(cs, (Constant) {
-		       .kind = CK_METHOD,
+		       .kind = CK_FUNCTION,
 		       .method = (CFunction) {
 				.local_cnt = cs->local_cnt - function->parameter_cnt - 1,
 				.parameter_cnt = function->parameter_cnt + 1,
@@ -3029,7 +3029,7 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	size_t instruction_len = garena_cnt_from(&cs.instructions, u8, start);
 	u8 *instruction_start = move_to_arena(cs.arena, &cs.instructions, start, u8);
 	u16 entry_point = add_constant(&cs, (Constant) {
-	       .kind = CK_METHOD,
+	       .kind = CK_FUNCTION,
 	       .method = (CFunction) {
 			.local_cnt = cs.local_cnt - 1,
 			.parameter_cnt = 1,
@@ -3107,7 +3107,7 @@ write_constant(FILE *f, Constant *constant)
 		write_u32(f, constant->string.len);
 		fwrite(constant->string.str, constant->string.len, 1, f);
 		break;
-	case CK_METHOD:
+	case CK_FUNCTION:
 		write_u8(f, constant->method.parameter_cnt);
 		write_u16(f, constant->method.local_cnt);
 		write_u32(f, constant->method.instruction_len);
@@ -3489,7 +3489,7 @@ print_constant(Constant *constant, Program *program, FILE *f)
 	case CK_STRING:
 		fprintf(f, "\"%.*s\"", (int) constant->string.len, constant->string.str);
 		break;
-	case CK_METHOD: {
+	case CK_FUNCTION: {
 		CFunction *method = &constant->method;
 		fprintf(f, "Function(params: %"PRIi8", locals: %"PRIi8", length: %zu)\n", method->parameter_cnt, method->local_cnt, method->instruction_len);
 		u8 *start = method->instruction_start;
@@ -3515,7 +3515,7 @@ print_constant(Constant *constant, Program *program, FILE *f)
 			case OP_FUNCTION: {
 				u16 constant_index = read_u16(&ip);
 				Constant *constant = &program->constants[constant_index];
-				assert(constant->kind == CK_METHOD);
+				assert(constant->kind == CK_FUNCTION);
 				fprintf(f, "function #%"PRIu16, constant_index);
 				break;
 			}
