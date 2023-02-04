@@ -1588,6 +1588,9 @@ value_method_try(ErrorContext *ec, Value value, Value *receiver, Str name)
 	if (was_object && value_is_null(*receiver)) {
 		exec_error(ec, "undefined method '%.*s' for object", (int)name.len, name.str);
 	}
+	if (field && !value_is_function(*field)) {
+		exec_error(ec, "Method in method call is not a function");
+	}
 	return field;
 }
 
