@@ -1622,24 +1622,45 @@ value_call_primitive_method(ErrorContext *ec, Value target, Str method, Value *a
 
 	switch (target.kind) {
 	case VK_NULL:
-	case VK_BOOLEAN:
+	case VK_BOOLEAN: {
 		if (argument_cnt != 1) goto err;
 		if (arguments[0].kind != VK_BOOLEAN) goto err;
-		#define LOG_OP(op) return make_boolean(value_as_bool(target) op value_as_bool(arguments[0]))
-		METHOD("&") LOG_OP(&&);
-		METHOD("|") LOG_OP(||);
-		#undef LOG_OP
+		bool left = value_as_bool(target);
+		bool right = value_as_bool(arguments[0]);
+		METHOD("&") return make_boolean(left && right);
+		METHOD("|") return make_boolean(left || right);
 		break;
-	case VK_INTEGER:
+	}
+	case VK_INTEGER: {
 		if (argument_cnt != 1) goto err;
 		if (arguments[0].kind != VK_INTEGER) goto err;
-		#define OP(op) METHOD(#op) return make_integer(value_as_integer(target) op value_as_integer(arguments[0]))
-		#define REL_OP(op) METHOD(#op) return make_boolean(value_as_integer(target) op value_as_integer(arguments[0]))
-		OP(+); OP(-); OP(*); OP(/); OP(%);
-		REL_OP(<=); REL_OP(<); REL_OP(>=); REL_OP(>);
-		#undef OP
-		#undef REL_OP
+		i32 left = value_as_integer(target);
+		i32 right = value_as_integer(arguments[0]);
+		METHOD("+") return make_integer(left + right);
+		METHOD("-") return make_integer(left - right);
+		METHOD("*") return make_integer(left * right);
+		METHOD("/") {
+				if (right == 0) {
+					exec_error(ec, "Division by zero");
+					return make_integer(0);
+				} else {
+					return make_integer(left / right);
+				}
+		}
+		METHOD("%") {
+				if (right == 0) {
+					exec_error(ec, "Modulo by zero");
+					return make_integer(0);
+				} else {
+					return make_integer(left % right);
+				}
+		}
+		METHOD("<=") return make_boolean(left <= right);
+		METHOD("<") return make_boolean(left < right);
+		METHOD(">=") return make_boolean(left >= right);
+		METHOD(">") return make_boolean(left > right);
 		break;
+	}
 	case VK_GCVALUE:
 		switch (target.gcvalue->kind) {
 		case GK_ARRAY:
