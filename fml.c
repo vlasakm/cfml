@@ -1633,6 +1633,7 @@ value_call_primitive_method(ErrorContext *ec, Value target, Str method, Value *a
 
 	switch (target.kind) {
 	case VK_NULL:
+		break;
 	case VK_BOOLEAN: {
 		if (argument_cnt != 1) goto err;
 		if (arguments[0].kind != VK_BOOLEAN) goto err;
