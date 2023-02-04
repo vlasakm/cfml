@@ -183,6 +183,14 @@ garena_mem(GArena *arena)
 	return arena->mem;
 }
 
+#define garena_array_from(arena, start, type) ((type *)garena_from((arena), (start), alignof(type)))
+void *
+garena_from(GArena *arena, size_t start, size_t alignment)
+{
+	size_t pos = align(start, alignment);
+	return &arena->mem[pos];
+}
+
 #define garena_cnt(arena, type) (((arena)->pos) / sizeof(type))
 #define garena_cnt_from(arena, type, start) ((((arena)->pos) - (start)) / sizeof(type))
 #define garena_push(arena, type) ((type *)garena_alloc((arena), sizeof(type), alignof(type)))
