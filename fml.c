@@ -890,12 +890,12 @@ block(Parser *parser)
 static Ast *
 let(Parser *parser)
 {
-	AST_CREATE(AstDefinition, declaration, parser->arena, AST_DEFINITION);
+	AST_CREATE(AstDefinition, definition, parser->arena, AST_DEFINITION);
 	eat(parser, TK_LET);
-	eat_identifier(parser, &declaration->name);
+	eat_identifier(parser, &definition->name);
 	eat(parser, TK_EQUAL);
-	declaration->value = expression(parser);
-	return &declaration->base;
+	definition->value = expression(parser);
+	return &definition->base;
 }
 
 static Ast *
@@ -926,7 +926,7 @@ object(Parser *parser)
 	expression_list(parser, &object->members, &object->member_cnt, TK_SEMICOLON, TK_END);
 	for (size_t i = 0; i < object->member_cnt; i++) {
 		if (object->members[i]->kind != AST_DEFINITION) {
-			parser_error(parser, object_tok, "Found object member that is not a declaration");
+			parser_error(parser, object_tok, "Found object member that is not a definition");
 		}
 	}
 	return &object->base;
@@ -1003,10 +1003,10 @@ function(Parser *parser)
 	Ast *ast = &function->base;
 	eat(parser, TK_FUNCTION);
 	if (tok_is_identifier(peek(parser))) {
-		AST_CREATE(AstDefinition, declaration, parser->arena, AST_DEFINITION);
-		eat_identifier(parser, &declaration->name);
-		declaration->value = &function->base;
-		ast = &declaration->base;
+		AST_CREATE(AstDefinition, definition, parser->arena, AST_DEFINITION);
+		eat_identifier(parser, &definition->name);
+		definition->value = &function->base;
+		ast = &definition->base;
 	}
 	eat(parser, TK_LPAREN);
 	identifier_list(parser, &function->parameters, &function->parameter_cnt, TK_COMMA, TK_RPAREN);
@@ -1898,9 +1898,9 @@ interpret(InterpreterState *is, Ast *ast)
 			Ast *ast_member = object->members[i];
 			switch (ast_member->kind) {
 			case AST_DEFINITION: {
-				AstDefinition *declaration = (AstDefinition *) ast_member;
-				object_obj->fields[i].name = declaration->name;
-				object_obj->fields[i].value = interpret(is, declaration->value);
+				AstDefinition *definition = (AstDefinition *) ast_member;
+				object_obj->fields[i].name = definition->name;
+				object_obj->fields[i].value = interpret(is, definition->value);
 				break;
 			}
 			default:
@@ -1915,9 +1915,9 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 
 	case AST_DEFINITION: {
-		AstDefinition *declaration = (AstDefinition *) ast;
-		Value value = interpret(is, declaration->value);
-		env_define(is->env, declaration->name, value);
+		AstDefinition *definition = (AstDefinition *) ast;
+		Value value = interpret(is, definition->value);
+		env_define(is->env, definition->name, value);
 		return value;
 	}
 
@@ -2830,21 +2830,21 @@ compile(CompilerState *cs, Ast *ast)
 	}
 
 	case AST_DEFINITION: {
-		AstDefinition *declaration = (AstDefinition *) ast;
+		AstDefinition *definition = (AstDefinition *) ast;
 		bool saved_in_definition = cs->in_definition;
 		cs->in_definition = true;
-		compile(cs, declaration->value);
+		compile(cs, definition->value);
 		cs->in_definition = saved_in_definition;
 		if (cs->in_object || !cs->in_block) {
-			u16 name = add_string(cs, declaration->name);
+			u16 name = add_string(cs, definition->name);
 			garena_push_value(&cs->members, u16, name);
 			if (!cs->in_object) {
-				op_string(cs, OP_SET_GLOBAL, declaration->name);
+				op_string(cs, OP_SET_GLOBAL, definition->name);
 			} else if (cs->in_definition) {
 				error(cs->ec, NULL, "compile", true, "Nested definition in definition in object not allowed");
 			}
 		} else {
-			env_define(cs->env, declaration->name, make_integer(cs->local_cnt));
+			env_define(cs->env, definition->name, make_integer(cs->local_cnt));
 			op_index(cs, OP_SET_LOCAL, cs->local_cnt);
 			cs->local_cnt += 1;
 		}
@@ -3231,10 +3231,10 @@ write_ast_json(OutputState *os, Ast *ast, int indent, bool first)
 	}
 
 	case AST_DEFINITION: {
-		AstDefinition *declaration = (AstDefinition *) ast;
+		AstDefinition *definition = (AstDefinition *) ast;
 		write_ast_json_begin(os, "Definition", ast->kind, indent, first);
-		write_ast_json_field_string(os, "name", declaration->name, indent);
-		write_ast_json_field(os, "value", declaration->value, indent);
+		write_ast_json_field_string(os, "name", definition->name, indent);
+		write_ast_json_field(os, "value", definition->value, indent);
 		write_ast_json_end(os, indent, first);
 		return;
 	}
