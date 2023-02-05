@@ -2290,12 +2290,35 @@ make_null_vm(VM *vm)
 }
 
 static Value
-vm_pop(VM *vm)
+vm_peek(VM *vm)
 {
 	// beware of the unintuitive check below due to unsigned integer
 	// wrap around
-	assert(vm->stack_pos <= vm->stack_len);
+	assert(vm->stack_pos < vm->stack_len);
+	return vm->stack[vm->stack_pos];
+}
+
+static Value *
+vm_peek_n(VM *vm, size_t n)
+{
+	size_t pos = vm->stack_pos - (n - 1);
+	assert(pos < vm->stack_len);
+	return &vm->stack[pos];
+}
+
+static Value
+vm_pop(VM *vm)
+{
+	assert(vm->stack_pos < vm->stack_len);
 	return vm->stack[vm->stack_pos--];
+}
+
+
+static void
+vm_pop_n(VM *vm, size_t n)
+{
+	assert(vm->stack_pos - (n - 1) < vm->stack_len);
+	vm->stack_pos -= n;
 }
 
 static void
@@ -2351,8 +2374,8 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 	vm->bp = vm->frame_stack_pos;
 	vm->frame_stack_pos += local_cnt;
 
-	Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
-	vm->stack_pos -= argument_cnt;
+	Value *arguments = vm_peek_n(vm, argument_cnt);
+	vm_pop_n(vm, argument_cnt);
 	Value *locals = &vm->frame_stack[vm->bp];
 	for (size_t i = 0; i < argument_cnt; i++) {
 		locals[i] = arguments[i];
@@ -2395,7 +2418,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			for (size_t i = 0; i < size; i++) {
 				array->values[i] = initializer;
 			}
-			vm->stack[++vm->stack_pos] = array_value;
+			vm_push(vm, array_value);
 			break;
 		}
 		case OP_OBJECT: {
@@ -2413,7 +2436,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		}
 		case OP_SET_LOCAL: {
 			u16 local_index = read_u16(&ip);
-			locals[local_index] = vm->stack[vm->stack_pos];
+			locals[local_index] = vm_peek(vm);
 			break;
 		}
 		case OP_GET_GLOBAL: {
@@ -2425,7 +2448,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		case OP_SET_GLOBAL: {
 			Str name = constant_string(vm, &ip);
 			Value *lvalue = value_field(vm->ec, vm->global, &vm->global, name);
-			*lvalue = vm->stack[vm->stack_pos];
+			*lvalue = vm_peek(vm);
 			break;
 		}
 		case OP_GET_FIELD: {
@@ -2459,7 +2482,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		}
 		case OP_CALL_FUNCTION: {
 			u8 argument_cnt = read_u8(&ip);
-			Value *function = &vm->stack[vm->stack_pos - argument_cnt];
+			Value *function = vm_peek_n(vm, argument_cnt + 1);
 			if (!value_is_function(*function)) {
 				exec_error(vm->ec, "Function call target is not a function");
 			}
@@ -2472,15 +2495,15 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		case OP_CALL_METHOD: {
 			Str name = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
-			Value *lobject = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
+			Value *lobject = vm_peek_n(vm, argument_cnt);
 			Value *method_value = value_method_try(vm->ec, *lobject, lobject, name);
 			if (method_value) {
 				u16 method_index = value_as_function_bc(*method_value);
 				vm_call_method(vm, method_index, argument_cnt);
 			} else {
-				Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 2)];
+				Value *arguments = vm_peek_n(vm, argument_cnt - 1);
 				Value return_value = value_call_primitive_method(vm->ec, *lobject, name, arguments, argument_cnt - 1);
-				vm->stack_pos -= argument_cnt;
+				vm_pop_n(vm, argument_cnt);
 				vm_push(vm, return_value);
 			}
 			break;
@@ -2488,9 +2511,9 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		case OP_PRINT: {
 			Str format_string = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
-			Value *arguments = &vm->stack[vm->stack_pos - (argument_cnt - 1)];
+			Value *arguments = vm_peek_n(vm, argument_cnt);
 			builtin_print(vm->ec, format_string, arguments, argument_cnt);
-			vm->stack_pos -= argument_cnt;
+			vm_pop_n(vm, argument_cnt);
 			vm_push(vm, make_null());
 			break;
 		}
