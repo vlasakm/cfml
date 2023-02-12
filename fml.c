@@ -280,32 +280,33 @@ typedef enum {
 } LexState;
 
 #define TOKENS(KW, PU, OT) \
+	/* token          repr             led       nud      lbp  right assoc */ \
 	OT(NUMBER,        "a number",      primary,  NULL,      0,  0) \
 	OT(IDENTIFIER,    "an identifier", ident,    NULL,      0,  0) \
 	OT(STRING,        "a string",      NULL,     NULL,      0,  0) \
                                                                        \
-	PU(BAR,           "|",             NULL,     binop,     3,  4) \
-	PU(AMPERSANT,     "&",             NULL,     binop,     5,  6) \
-	PU(EQUAL_EQUAL,   "==",            NULL,     binop,     7,  8) \
-	PU(BANG_EQUAL,    "!=",            NULL,     binop,     7,  8) \
-	PU(GREATER,       ">",             NULL,     binop,     7,  8) \
-	PU(LESS,          "<",             NULL,     binop,     7,  8) \
-	PU(GREATER_EQUAL, ">=",            NULL,     binop,     7,  8) \
-	PU(LESS_EQUAL,    "<=",            NULL,     binop,     7,  8) \
-	PU(PLUS,          "+",             NULL,     binop,     9, 10) \
-	PU(MINUS,         "-",             NULL,     binop,     9, 10) \
-	PU(ASTERISK,      "*",             NULL,     binop,    11, 12) \
-	PU(SLASH,         "/",             NULL,     binop,    11, 12) \
-	PU(PERCENT,       "%",             NULL,     binop,    11, 12) \
+	PU(BAR,           "|",             NULL,     binop,     2,  0) \
+	PU(AMPERSANT,     "&",             NULL,     binop,     3,  0) \
+	PU(EQUAL_EQUAL,   "==",            NULL,     binop,     4,  0) \
+	PU(BANG_EQUAL,    "!=",            NULL,     binop,     4,  0) \
+	PU(GREATER,       ">",             NULL,     binop,     4,  0) \
+	PU(LESS,          "<",             NULL,     binop,     4,  0) \
+	PU(GREATER_EQUAL, ">=",            NULL,     binop,     4,  0) \
+	PU(LESS_EQUAL,    "<=",            NULL,     binop,     4,  0) \
+	PU(PLUS,          "+",             NULL,     binop,     5,  0) \
+	PU(MINUS,         "-",             NULL,     binop,     5,  0) \
+	PU(ASTERISK,      "*",             NULL,     binop,     6,  0) \
+	PU(SLASH,         "/",             NULL,     binop,     6,  0) \
+	PU(PERCENT,       "%",             NULL,     binop,     6,  0) \
 	                                                               \
 	PU(SEMICOLON,     ";",             NULL,     stop,     -1,  0) \
-	PU(LPAREN,        "(",             paren,    call,     13, 14) \
+	PU(LPAREN,        "(",             paren,    call,      7,  0) \
 	PU(RPAREN,        ")",             NULL,     stop,     -1,  0) \
 	PU(EQUAL,         "=",             NULL,     NULL,      0,  0) \
-	PU(LARROW,        "<-",            NULL,     assign,    2,  1) \
+	PU(LARROW,        "<-",            NULL,     assign,    1,  1) \
 	PU(RARROW,        "->",            NULL,     NULL,      0,  0) \
-	PU(DOT,           ".",             NULL,     field,    13, 14) \
-	PU(LBRACKET,      "[",             NULL,     indexing, 13, 14) \
+	PU(DOT,           ".",             NULL,     field,     7,  0) \
+	PU(LBRACKET,      "[",             NULL,     indexing,  7,  0) \
 	PU(RBRACKET,      "]",             NULL,     stop,     -1,  0) \
 	PU(COMMA,         ",",             NULL,     stop,     -1,  0) \
 	                                                               \
@@ -1142,7 +1143,7 @@ typedef struct {
 } LeftInfo;
 
 LeftInfo left_info[] = {
-	#define TOK_LEFT(tok, str, nud, led, lbp, rbp) { led, lbp, rbp },
+	#define TOK_LEFT(tok, str, nud, led, lbp, right_assoc) { led, lbp, lbp + !right_assoc },
 	TOKENS(TOK_LEFT, TOK_LEFT, TOK_LEFT)
 	#undef TOK_STR
 };
