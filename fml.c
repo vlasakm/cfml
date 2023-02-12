@@ -1089,8 +1089,6 @@ static Ast *
 call(Parser *parser, Ast *left, int rbp)
 {
 	(void) rbp;
-	// NOTE: In this function we change Ast's from one kind to other, so we
-	// copy the old structs to avoid problems with aliasing union fields
 	eat(parser, TK_LPAREN);
 	switch (left->kind) {
 	case AST_FIELD_ACCESS: {
@@ -1138,8 +1136,6 @@ field(Parser *parser, Ast *left, int rbp)
 static Ast *
 assign(Parser *parser, Ast *left, int rbp)
 {
-	// NOTE: In this function we change Ast's from one kind to other, so we
-	// copy the old structs to avoid problems with aliasing union fields
 	eat(parser, TK_LARROW);
 	switch (left->kind) {
 	case AST_VARIABLE_ACCESS: {
