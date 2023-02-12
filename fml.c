@@ -279,56 +279,74 @@ typedef enum {
 	LS_EXCLAM,
 } LexState;
 
+typedef enum {
+	ASSOC_LEFT,
+	ASSOC_RIGHT,
+} Associativity;
+
+typedef enum {
+	PREC_NONE,
+	PREC_EXPR,
+	PREC_ASGN,
+	PREC_DISJ,
+	PREC_CONJ,
+	PREC_CMP,
+	PREC_ADD,
+	PREC_MUL,
+	PREC_POST,
+	PREC_TOP,
+} Precedence;
+
 #define TOKENS(KW, PU, OT) \
-	/* token          repr             led       nud      lbp  right assoc */ \
-	OT(NUMBER,        "a number",      primary,  NULL,      0,  0) \
-	OT(IDENTIFIER,    "an identifier", ident,    NULL,      0,  0) \
-	OT(STRING,        "a string",      NULL,     NULL,      0,  0) \
-                                                                       \
-	PU(BAR,           "|",             NULL,     binop,     2,  0) \
-	PU(AMPERSANT,     "&",             NULL,     binop,     3,  0) \
-	PU(EQUAL_EQUAL,   "==",            NULL,     binop,     4,  0) \
-	PU(BANG_EQUAL,    "!=",            NULL,     binop,     4,  0) \
-	PU(GREATER,       ">",             NULL,     binop,     4,  0) \
-	PU(LESS,          "<",             NULL,     binop,     4,  0) \
-	PU(GREATER_EQUAL, ">=",            NULL,     binop,     4,  0) \
-	PU(LESS_EQUAL,    "<=",            NULL,     binop,     4,  0) \
-	PU(PLUS,          "+",             NULL,     binop,     5,  0) \
-	PU(MINUS,         "-",             NULL,     binop,     5,  0) \
-	PU(ASTERISK,      "*",             NULL,     binop,     6,  0) \
-	PU(SLASH,         "/",             NULL,     binop,     6,  0) \
-	PU(PERCENT,       "%",             NULL,     binop,     6,  0) \
-	                                                               \
-	PU(SEMICOLON,     ";",             NULL,     stop,     -1,  0) \
-	PU(LPAREN,        "(",             paren,    call,      7,  0) \
-	PU(RPAREN,        ")",             NULL,     stop,     -1,  0) \
-	PU(EQUAL,         "=",             NULL,     NULL,      0,  0) \
-	PU(LARROW,        "<-",            NULL,     assign,    1,  1) \
-	PU(RARROW,        "->",            NULL,     NULL,      0,  0) \
-	PU(DOT,           ".",             NULL,     field,     7,  0) \
-	PU(LBRACKET,      "[",             NULL,     indexing,  7,  0) \
-	PU(RBRACKET,      "]",             NULL,     stop,     -1,  0) \
-	PU(COMMA,         ",",             NULL,     stop,     -1,  0) \
-	                                                               \
-	KW(BEGIN,         "begin",         block,    stop,     -1,  0) \
-	KW(END,           "end",           NULL,     stop,     -1,  0) \
-	KW(IF,            "if",            cond,     NULL,      0,  0) \
-	KW(THEN,          "then",          NULL,     stop,     -1,  0) \
-	KW(ELSE,          "else",          NULL,     stop,     -1,  0) \
-	KW(LET,           "let",           let,      NULL,      0,  0) \
-	KW(NULL,          "null",          primary,  NULL,      0,  0) \
-	KW(PRINT,         "print",         print,    NULL,      0,  0) \
-	KW(OBJECT,        "object",        object,   NULL,      0,  0) \
-	KW(EXTENDS,       "extends",       NULL,     NULL,      0,  0) \
-	KW(WHILE,         "while",         loop,     NULL,      0,  0) \
-	KW(DO,            "do",            NULL,     stop,     -1,  0) \
-	KW(FUNCTION,      "function",      function, NULL,      0,  0) \
-	KW(ARRAY,         "array",         array,    NULL,      0,  0) \
-	KW(TRUE,          "true",          primary,  NULL,      0,  0) \
-	KW(FALSE,         "false",         primary,  NULL,      0,  0) \
-	                                                               \
-	OT(EOF,           "end of input",  NULL,     stop,     -1,  0) \
-	OT(ERROR,         "lex error",     NULL,     NULL,      0,  0)
+	/* token          repr             nud       led       prec  assoc*/\
+	OT(NUMBER,        "a number",      primary,  lefterr,  TOP,  LEFT)  \
+	OT(IDENTIFIER,    "an identifier", ident,    lefterr,  TOP,  LEFT)  \
+	OT(STRING,        "a string",      nullerr,  lefterr,  TOP,  LEFT)  \
+                                                                            \
+	PU(BAR,           "|",             nullerr,  binop,    DISJ, LEFT)  \
+	PU(AMPERSANT,     "&",             nullerr,  binop,    CONJ, LEFT)  \
+	PU(EQUAL_EQUAL,   "==",            nullerr,  binop,    CMP,  LEFT)  \
+	PU(BANG_EQUAL,    "!=",            nullerr,  binop,    CMP,  LEFT)  \
+	PU(GREATER,       ">",             nullerr,  binop,    CMP,  LEFT)  \
+	PU(LESS,          "<",             nullerr,  binop,    CMP,  LEFT)  \
+	PU(GREATER_EQUAL, ">=",            nullerr,  binop,    CMP,  LEFT)  \
+	PU(LESS_EQUAL,    "<=",            nullerr,  binop,    CMP,  LEFT)  \
+	PU(PLUS,          "+",             nullerr,  binop,    ADD,  LEFT)  \
+	PU(MINUS,         "-",             nullerr,  binop,    ADD,  LEFT)  \
+	PU(ASTERISK,      "*",             nullerr,  binop,    MUL,  LEFT)  \
+	PU(SLASH,         "/",             nullerr,  binop,    MUL,  LEFT)  \
+	PU(PERCENT,       "%",             nullerr,  binop,    MUL,  LEFT)  \
+	                                                                    \
+	PU(SEMICOLON,     ";",             nullerr,  stop,     NONE, LEFT)  \
+	PU(LPAREN,        "(",             paren,    call,     POST, LEFT)  \
+	PU(RPAREN,        ")",             nullerr,  stop,     NONE, LEFT)  \
+	PU(EQUAL,         "=",             nullerr,  eqerr,    TOP,  LEFT)  \
+	PU(LARROW,        "<-",            nullerr,  assign,   ASGN, RIGHT) \
+	PU(RARROW,        "->",            nullerr,  lefterr,  TOP,  LEFT)  \
+	PU(DOT,           ".",             nullerr,  field,    POST, LEFT)  \
+	PU(LBRACKET,      "[",             nullerr,  indexing, POST, LEFT)  \
+	PU(RBRACKET,      "]",             nullerr,  stop,     NONE, LEFT)  \
+	PU(COMMA,         ",",             nullerr,  stop,     NONE, LEFT)  \
+	                                                                    \
+	KW(BEGIN,         "begin",         block,    stop,     NONE, LEFT)  \
+	KW(END,           "end",           nullerr,  stop,     NONE, LEFT)  \
+	KW(IF,            "if",            cond,     lefterr,  TOP,  LEFT)  \
+	KW(THEN,          "then",          nullerr,  stop,     NONE, LEFT)  \
+	KW(ELSE,          "else",          nullerr,  stop,     NONE, LEFT)  \
+	KW(LET,           "let",           let,      lefterr,  TOP,  LEFT)  \
+	KW(NULL,          "null",          primary,  lefterr,  TOP,  LEFT)  \
+	KW(PRINT,         "print",         print,    lefterr,  TOP,  LEFT)  \
+	KW(OBJECT,        "object",        object,   lefterr,  TOP,  LEFT)  \
+	KW(EXTENDS,       "extends",       nullerr,  lefterr,  TOP,  LEFT)  \
+	KW(WHILE,         "while",         loop,     lefterr,  TOP,  LEFT)  \
+	KW(DO,            "do",            nullerr,  stop,     NONE, LEFT)  \
+	KW(FUNCTION,      "function",      function, lefterr,  TOP,  LEFT)  \
+	KW(ARRAY,         "array",         array,    lefterr,  TOP,  LEFT)  \
+	KW(TRUE,          "true",          primary,  lefterr,  TOP,  LEFT)  \
+	KW(FALSE,         "false",         primary,  lefterr,  TOP,  LEFT)  \
+	                                                                    \
+	OT(EOF,           "end of input",  nullerr,  stop,     NONE, LEFT)  \
+	OT(ERROR,         "lex error",     nullerr,  lefterr,  TOP,  LEFT)
 
 
 typedef enum {
@@ -794,7 +812,7 @@ static Ast *expression_bp(Parser *parser, int bp);
 static Ast *
 expression(Parser *parser)
 {
-	return expression_bp(parser, 0);
+	return expression_bp(parser, PREC_EXPR);
 }
 
 static void
@@ -827,6 +845,13 @@ identifier_list(Parser *parser, Str **list, size_t *n, TokenKind separator, Toke
 	*list = move_to_arena(parser->arena, parser->scratch, start, Str);
 }
 
+static Ast *
+nullerr(Parser *parser)
+{
+	Token tok = discard(parser);
+	parser_error(parser, tok, "Invalid start of expression %s", tok_repr[tok.kind]);
+	return NULL;
+}
 
 static Ast *
 primary(Parser *parser)
@@ -1026,6 +1051,26 @@ stop(Parser *parser, Ast *left, int rbp)
 }
 
 static Ast *
+lefterr(Parser *parser, Ast *left, int rbp)
+{
+	(void) left;
+	(void) rbp;
+	Token tok = discard(parser);
+	parser_error(parser, tok, "Invalid expression continuing/ending token %s", tok_repr[tok.kind]);
+	return NULL;
+}
+
+static Ast *
+eqerr(Parser *parser, Ast *left, int rbp)
+{
+	(void) left;
+	(void) rbp;
+	Token tok = discard(parser);
+	parser_error(parser, tok, "Unexpected %s, did you mean to use %s for assignment?", tok_repr[TK_EQUAL], tok_repr[TK_LARROW]);
+	return NULL;
+}
+
+static Ast *
 binop(Parser *parser, Ast *left, int rbp)
 {
 	AST_CREATE(AstMethodCall, method_call, parser->arena, AST_METHOD_CALL);
@@ -1143,7 +1188,7 @@ typedef struct {
 } LeftInfo;
 
 LeftInfo left_info[] = {
-	#define TOK_LEFT(tok, str, nud, led, lbp, right_assoc) { led, lbp, lbp + !right_assoc },
+	#define TOK_LEFT(tok, str, nud, led, prec, assoc) { led, PREC_##prec, PREC_##prec + (ASSOC_##assoc == ASSOC_LEFT) },
 	TOKENS(TOK_LEFT, TOK_LEFT, TOK_LEFT)
 	#undef TOK_STR
 };
@@ -1151,25 +1196,11 @@ LeftInfo left_info[] = {
 static Ast *
 expression_bp(Parser *parser, int bp)
 {
-	TokenKind token = peek(parser);
-	NullInfo ni = null_info[token];
-	Ast *left;
-
-	if (!ni.nud) {
-		parser_error(parser, parser->lookahead, "Invalid start of expression %s", tok_repr[token]);
-	}
-	left = ni.nud(parser);
+	NullInfo ni = null_info[peek(parser)];
+	Ast *left = ni.nud(parser);
 
 	for (;;) {
-		token = peek(parser);
-		LeftInfo li = left_info[token];
-		if (!li.led) {
-			if (token == TK_EQUAL) {
-				parser_error(parser, parser->lookahead, "Unexpected %s, did you mean to use %s for assignment?", tok_repr[TK_EQUAL], tok_repr[TK_LARROW]);
-			} else {
-				parser_error(parser, parser->lookahead, "Invalid expression continuing/ending token %s", tok_repr[token]);
-			}
-		}
+		LeftInfo li = left_info[peek(parser)];
 		if (li.lbp < bp) {
 			break;
 		}
