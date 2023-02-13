@@ -211,6 +211,33 @@ move_to_arena_(Arena *arena, GArena *garena, size_t start, size_t alignment)
 }
 
 
+typedef struct {
+	const u8 *str;
+	size_t len;
+} Str;
+#define STR(lit) (Str) { .str = (const u8 *) lit, .len = sizeof(lit) - 1 }
+
+bool
+str_eq(Str a, Str b)
+{
+	return a.len == b.len && memcmp(a.str, b.str, a.len) == 0;
+}
+
+
+// FNV-1a hash
+// http://www.isthe.com/chongo/tech/comp/fnv/
+u64
+str_hash(Str id)
+{
+    u64 h = UINT64_C(14695981039346656037);
+    for (size_t i = 0; i < id.len; i++) {
+	// beware of unwanted sign extension!
+        h ^= id.str[i];
+        h *= UINT64_C(1099511628211);
+    }
+    return h;
+}
+
 typedef struct Error Error;
 struct Error {
 	Error *next;
@@ -320,7 +347,7 @@ typedef enum {
 	PU(SEMICOLON,     ";",             nullerr,  stop,     NONE, LEFT)  \
 	PU(LPAREN,        "(",             paren,    call,     POST, LEFT)  \
 	PU(RPAREN,        ")",             nullerr,  stop,     NONE, LEFT)  \
-	PU(EQUAL,         "=",             nullerr,  eqerr,    TOP,  LEFT)  \
+	PU(EQUAL,         "=",             nullerr,  eqerr,    ASGN, LEFT)  \
 	PU(LARROW,        "<-",            nullerr,  assign,   ASGN, RIGHT) \
 	PU(RARROW,        "->",            nullerr,  lefterr,  TOP,  LEFT)  \
 	PU(DOT,           ".",             nullerr,  field,    POST, LEFT)  \
@@ -382,8 +409,7 @@ tok_is_identifier(TokenKind kind)
 
 typedef struct {
 	TokenKind kind;
-	const u8 *pos;
-	const u8 *end;
+	Str str;
 } Token;
 
 Lexer
@@ -517,35 +543,8 @@ err:
 		}
 	}
 	token->kind = tok;
-	token->pos = start;
-	token->end = lexer->pos + end_offset;
-}
-
-typedef struct {
-	const u8 *str;
-	size_t len;
-} Str;
-#define STR(lit) (Str) { .str = (const u8 *) lit, .len = sizeof(lit) - 1 }
-
-bool
-str_eq(Str a, Str b)
-{
-	return a.len == b.len && memcmp(a.str, b.str, a.len) == 0;
-}
-
-
-// FNV-1a hash
-// http://www.isthe.com/chongo/tech/comp/fnv/
-u64
-str_hash(Str id)
-{
-    u64 h = UINT64_C(14695981039346656037);
-    for (size_t i = 0; i < id.len; i++) {
-	// beware of unwanted sign extension!
-        h ^= id.str[i];
-        h *= UINT64_C(1099511628211);
-    }
-    return h;
+	token->str.str = start;
+	token->str.len = length;
 }
 
 typedef enum {
@@ -725,7 +724,7 @@ parser_error(Parser *parser, Token errtok, const char *msg, ...)
 {
 	va_list ap;
 	va_start(ap, msg);
-	verror(parser->ec, errtok.pos, "parse", true, msg, ap);
+	verror(parser->ec, errtok.str.str, "parse", true, msg, ap);
 	va_end(ap);
 }
 
@@ -738,7 +737,7 @@ peek(const Parser *parser)
 static Token
 prev_tok(Parser *parser)
 {
-	return parser->lookahead;
+	return parser->prev;
 }
 
 static Token
@@ -752,32 +751,24 @@ discard(Parser *parser)
 static void
 eat(Parser *parser, TokenKind kind)
 {
-	Token tok = discard(parser);
-	if (tok.kind != kind) {
-		parser_error(parser, tok, "expected %s, found %s", tok_repr[kind], tok_repr[tok.kind]);
+	TokenKind tok = peek(parser);
+	if (tok != kind) {
+		parser_error(parser, parser->lookahead, "expected %s, found %s", tok_repr[kind], tok_repr[tok]);
+		return;
 	}
+	discard(parser);
 }
 
 static void
 eat_identifier(Parser *parser, Str *identifier)
 {
-	Token tok = discard(parser);
-	if (!tok_is_identifier(tok.kind)) {
-		parser_error(parser, tok, "expected %s, found %s", tok_repr[TK_IDENTIFIER], tok_repr[tok.kind]);
+	TokenKind tok = peek(parser);
+	if (!tok_is_identifier(tok)) {
+		parser_error(parser, parser->lookahead, "expected %s, found %s", tok_repr[TK_IDENTIFIER], tok_repr[tok]);
+		return;
 	}
-	identifier->str = tok.pos;
-	identifier->len = tok.end - tok.pos;
-}
-
-static void
-eat_string(Parser *parser, Str *identifier)
-{
-	Token tok = discard(parser);
-	if (tok.kind != TK_STRING) {
-		printf("expected %s, found %s\n", tok_repr[TK_STRING], tok_repr[tok.kind]);
-	}
-	identifier->str = tok.pos;
-	identifier->len = tok.end - tok.pos;
+	discard(parser);
+	*identifier = prev_tok(parser).str;
 }
 
 static bool
@@ -848,8 +839,8 @@ identifier_list(Parser *parser, Str **list, size_t *n, TokenKind separator, Toke
 static Ast *
 nullerr(Parser *parser)
 {
-	Token tok = discard(parser);
-	parser_error(parser, tok, "Invalid start of expression %s", tok_repr[tok.kind]);
+	TokenKind tok = peek(parser);
+	parser_error(parser, parser->lookahead, "Invalid start of expression %s", tok_repr[tok]);
 	return NULL;
 }
 
@@ -860,14 +851,15 @@ primary(Parser *parser)
 	switch (token.kind) {
 	case TK_NUMBER: {
 		AST_CREATE(AstInteger, integer, parser->arena, AST_INTEGER);
-		const u8 *pos = token.pos;
+		const u8 *pos = token.str.str;
+		const u8 *end = pos + token.str.len;
 		bool negative = 0;
 		while (*pos == '-') {
 			negative = !negative;
 			pos += 1;
 		}
 		i64 value = 0;
-		for (; pos < token.end; pos++) {
+		for (; pos < end; pos++) {
 			value = value * 10 + (*pos - '0');
 		}
 		integer->value = negative ? -value : value;
@@ -991,8 +983,9 @@ print(Parser *parser)
 	AST_CREATE(AstPrint, print, parser->arena, AST_PRINT);
 	eat(parser, TK_PRINT);
 	eat(parser, TK_LPAREN);
-	eat_string(parser, &print->format);
+	eat(parser, TK_STRING);
 	Token fmt_tok = prev_tok(parser);
+	print->format = fmt_tok.str;
 	size_t formats = 0;
 	for (size_t i = 0; i < print->format.len; i++) {
 		switch (print->format.str[i]) {
@@ -1055,18 +1048,8 @@ lefterr(Parser *parser, Ast *left, int rbp)
 {
 	(void) left;
 	(void) rbp;
-	Token tok = discard(parser);
-	parser_error(parser, tok, "Invalid expression continuing/ending token %s", tok_repr[tok.kind]);
-	return NULL;
-}
-
-static Ast *
-eqerr(Parser *parser, Ast *left, int rbp)
-{
-	(void) left;
-	(void) rbp;
-	Token tok = discard(parser);
-	parser_error(parser, tok, "Unexpected %s, did you mean to use %s for assignment?", tok_repr[TK_EQUAL], tok_repr[TK_LARROW]);
+	TokenKind tok = peek(parser);
+	parser_error(parser, parser->lookahead, "Invalid expression continuing/ending token %s", tok_repr[tok]);
 	return NULL;
 }
 
@@ -1074,10 +1057,9 @@ static Ast *
 binop(Parser *parser, Ast *left, int rbp)
 {
 	AST_CREATE(AstMethodCall, method_call, parser->arena, AST_METHOD_CALL);
-	Token token = discard(parser);
 	method_call->object = left;
-	method_call->name.str = token.pos;
-	method_call->name.len = token.end - token.pos;
+	Token token = discard(parser);
+	method_call->name = token.str;
 	method_call->arguments = arena_alloc(parser->arena, sizeof(*method_call->arguments));
 	method_call->arguments[0] = expression_bp(parser, rbp);
 	//method_call->arguments = expression_bp(parser, rbp);
@@ -1166,6 +1148,15 @@ assign(Parser *parser, Ast *left, int rbp)
 		return left;
 	}
 }
+
+static Ast *
+eqerr(Parser *parser, Ast *left, int rbp)
+{
+	parser_error(parser, parser->lookahead, "Unexpected %s, did you mean to use %s for assignment?", tok_repr[TK_EQUAL], tok_repr[TK_LARROW]);
+	parser->lookahead.kind = TK_LARROW;
+	return assign(parser, left, rbp);
+}
+
 
 typedef struct {
 	Ast *(*nud)(Parser *);
