@@ -375,7 +375,6 @@ typedef enum {
 	OT(EOF,           "end of input",  nullerr,  stop,     NONE, LEFT)  \
 	OT(ERROR,         "lex error",     nullerr,  lefterr,  TOP,  LEFT)
 
-
 typedef enum {
 	#define TOK_ENUM(tok, ...) TK_##tok,
 	TOKENS(TOK_ENUM, TOK_ENUM, TOK_ENUM)
@@ -398,7 +397,7 @@ static struct {
 	#define TOK_OTHER(tok, str, ...)
 	TOKENS(TOK_KW, TOK_OTHER, TOK_OTHER)
 	#undef TOK_KW
-#undef TOK_OTHER
+	#undef TOK_OTHER
 };
 
 static bool
@@ -413,7 +412,7 @@ typedef struct {
 } Token;
 
 Lexer
-lex_init(const u8 *buf, size_t size)
+lex_create(const u8 *buf, size_t size)
 {
 	return (Lexer) {
 		.pos = buf,
