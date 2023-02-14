@@ -698,32 +698,27 @@ typedef struct {
 } AstTop;
 
 typedef struct {
+	Arena *arena;
+	GArena *scratch;
+	void *user_data;
+	void(*error_callback)(void *user_data, const u8 *err_pos, const char *msg, va_list ap);
 	Lexer lexer;
 	Token lookahead;
 	Token prev;
-	Arena *arena;
-	GArena *scratch;
-	ErrorContext *ec;
+	bool had_error;
+	bool panic_mode;
 } Parser;
 
-void
-parser_init(Parser *parser, ErrorContext *ec, Arena *arena, GArena *scratch, const u8 *buf, size_t buf_len)
-{
-	ec->source = buf;
-	ec->source_len = buf_len;
-	parser->ec = ec;
-	parser->arena = arena;
-	parser->scratch = scratch;
-	parser->lexer = lex_init(buf, buf_len);
-	lex_next(&parser->lexer, &parser->lookahead);
-}
-
 static void
-parser_error(Parser *parser, Token errtok, const char *msg, ...)
+parser_error(Parser *parser, Token errtok, bool panic, const char *msg, ...)
 {
 	va_list ap;
 	va_start(ap, msg);
-	verror(parser->ec, errtok.str.str, "parse", true, msg, ap);
+	if (!parser->panic_mode) {
+		parser->error_callback(parser->user_data, errtok.str.str, msg, ap);
+		parser->had_error = true;
+		parser->panic_mode = panic;
+	}
 	va_end(ap);
 }
 
@@ -744,6 +739,9 @@ discard(Parser *parser)
 {
 	parser->prev = parser->lookahead;
 	lex_next(&parser->lexer, &parser->lookahead);
+	if (parser->lookahead.kind == TK_ERROR) {
+		parser_error(parser, parser->lookahead, true, "Unexpected character");
+	}
 	return parser->prev;
 }
 
@@ -752,7 +750,7 @@ eat(Parser *parser, TokenKind kind)
 {
 	TokenKind tok = peek(parser);
 	if (tok != kind) {
-		parser_error(parser, parser->lookahead, "expected %s, found %s", tok_repr[kind], tok_repr[tok]);
+		parser_error(parser, parser->lookahead, true, "Expected %s, found %s", tok_repr[kind], tok_repr[tok]);
 		return;
 	}
 	discard(parser);
@@ -763,7 +761,7 @@ eat_identifier(Parser *parser, Str *identifier)
 {
 	TokenKind tok = peek(parser);
 	if (!tok_is_identifier(tok)) {
-		parser_error(parser, parser->lookahead, "expected %s, found %s", tok_repr[TK_IDENTIFIER], tok_repr[tok]);
+		parser_error(parser, parser->lookahead, true, "Expected %s, found %s", tok_repr[TK_IDENTIFIER], tok_repr[tok]);
 		return;
 	}
 	discard(parser);
@@ -839,7 +837,7 @@ static Ast *
 nullerr(Parser *parser)
 {
 	TokenKind tok = peek(parser);
-	parser_error(parser, parser->lookahead, "Invalid start of expression %s", tok_repr[tok]);
+	parser_error(parser, parser->lookahead, true, "Invalid start of expression %s", tok_repr[tok]);
 	return NULL;
 }
 
@@ -943,7 +941,7 @@ object(Parser *parser)
 	expression_list(parser, &object->members, &object->member_cnt, TK_SEMICOLON, TK_END);
 	for (size_t i = 0; i < object->member_cnt; i++) {
 		if (object->members[i]->kind != AST_DEFINITION) {
-			parser_error(parser, object_tok, "Found object member that is not a definition");
+			parser_error(parser, object_tok, false, "Found object member that is not a definition");
 		}
 	}
 	return &object->base;
@@ -998,7 +996,7 @@ print(Parser *parser)
 		eat(parser, TK_RPAREN);
 	}
 	if (formats != print->argument_cnt) {
-		parser_error(parser, fmt_tok, "Invalid number of print arguments: %zu expected, got %zu", formats, print->argument_cnt);
+		parser_error(parser, fmt_tok, false, "Invalid number of print arguments: %zu expected, got %zu", formats, print->argument_cnt);
 	}
 	return &print->base;
 }
@@ -1048,7 +1046,10 @@ lefterr(Parser *parser, Ast *left, int rbp)
 	(void) left;
 	(void) rbp;
 	TokenKind tok = peek(parser);
-	parser_error(parser, parser->lookahead, "Invalid expression continuing/ending token %s", tok_repr[tok]);
+	parser_error(parser, parser->lookahead, true, "Invalid expression continuing/ending token %s", tok_repr[tok]);
+	// Set the current token to something with low binding power to not get
+	// into infinite loop of `lefterr`s on the same token.
+	parser->lookahead.kind = TK_EOF;
 	return NULL;
 }
 
@@ -1143,7 +1144,7 @@ assign(Parser *parser, Ast *left, int rbp)
 		return &index_assignment->base;
 	}
 	default:
-		parser_error(parser, parser->prev, "Invalid assignment left hand side, expected variable, index or field access");
+		parser_error(parser, parser->prev, false, "Invalid assignment left hand side, expected variable, index or field access");
 		return left;
 	}
 }
@@ -1151,7 +1152,7 @@ assign(Parser *parser, Ast *left, int rbp)
 static Ast *
 eqerr(Parser *parser, Ast *left, int rbp)
 {
-	parser_error(parser, parser->lookahead, "Unexpected %s, did you mean to use %s for assignment?", tok_repr[TK_EQUAL], tok_repr[TK_LARROW]);
+	parser_error(parser, parser->lookahead, false, "Unexpected %s, did you mean to use %s for assignment?", tok_repr[TK_EQUAL], tok_repr[TK_LARROW]);
 	parser->lookahead.kind = TK_LARROW;
 	return assign(parser, left, rbp);
 }
@@ -1166,6 +1167,20 @@ NullInfo null_info[] = {
 	TOKENS(TOK_NULL, TOK_NULL, TOK_NULL)
 	#undef TOK_STR
 };
+
+static bool
+at_synchronization_point(Parser *parser)
+{
+	if (parser->prev.kind == TK_EOF) {
+		// nothing to synchronize
+		return true;
+	}
+	if (parser->prev.kind == TK_SEMICOLON && null_info[parser->lookahead.kind].nud != nullerr) {
+		// an expression separator and a token that starts an expression
+		return true;
+	}
+	return false;
+}
 
 typedef struct {
 	Ast *(*led)(Parser *, Ast *left, int rbp);
@@ -1196,22 +1211,105 @@ expression_bp(Parser *parser, int bp)
 	return left;
 }
 
-Ast *
-parse(ErrorContext *ec, Arena *arena, u8 *buf, size_t buf_len)
+static Ast *
+top(Parser *parser)
 {
-	Parser parser;
-	GArena scratch;
-	garena_init(&scratch);
-	parser_init(&parser, ec, arena, &scratch, buf, buf_len);
-	// TODO: setjmp for GArena destruction
-	AST_CREATE(AstTop, top, parser.arena, AST_TOP);
-	expression_list(&parser, &top->expressions, &top->expression_cnt, TK_SEMICOLON, TK_EOF);
+	AST_CREATE(AstTop, top, parser->arena, AST_TOP);
+	for (;;) {
+		expression_list(parser, &top->expressions, &top->expression_cnt, TK_SEMICOLON, TK_EOF);
+		if (!parser->panic_mode) {
+			break;
+		}
+		do {
+			discard(parser);
+		} while (!at_synchronization_point(parser));
+		parser->panic_mode = false;
+	}
 	// empty program => null
 	if (top->expression_cnt == 0) {
 		top->base.kind = AST_NULL;
 	}
-	garena_destroy(&scratch);
 	return &top->base;
+}
+
+static void
+parser_error_cb(void *user_data, const u8 *err_pos, const char *msg, va_list ap)
+{
+	Str *src = user_data;
+	const u8 *line_start = src->str;
+	size_t line = 0;
+	const u8 *pos = src->str;
+	for (; pos < err_pos; pos++) {
+		if (*pos == '\n') {
+			line_start = pos + 1;
+			line++;
+		}
+	}
+	size_t col = pos - line_start;
+	const u8 *source_end = src->str + src->len;
+	const u8 *line_end = pos;
+	for (; line_end < source_end && *line_end != '\n'; line_end++) {}
+	fprintf(stderr, "[%zu:%zu]: parser error: ", line + 1, col + 1);
+	vfprintf(stderr, msg, ap);
+	fprintf(stderr, "\n");
+	fprintf(stderr, "  %.*s\n", (int) (line_end - line_start), line_start);
+	fprintf(stderr, "  %*s\n", (int) (pos - line_start + 1), "^");
+}
+
+Ast *
+parse(Arena *arena, GArena *scratch, u8 *buf, size_t buf_len, void(*error_callback)(void *user_data, const u8 *err_pos, const char *msg, va_list ap), void *user_data)
+{
+	Parser parser = {
+		.arena = arena,
+		.scratch = scratch,
+		.user_data = user_data,
+		.error_callback = error_callback,
+		.lexer = lex_create(buf, buf_len),
+		.had_error = false,
+		.panic_mode = false,
+	};
+	discard(&parser);
+
+	size_t save = arena_save(arena);
+	Ast *ast = top(&parser);
+	if (parser.had_error) {
+		arena_restore(arena, save);
+		return NULL;
+	}
+	return ast;
+}
+
+static void
+parser_verror(void *user_data, const u8 *err_pos, const char *msg, va_list ap)
+{
+	ErrorContext *ec = user_data;
+	verror(ec, err_pos, "parse", false, msg, ap);
+}
+
+Ast *
+parse_src(Arena *arena, u8 *buf, size_t buf_len)
+{
+	GArena scratch;
+	garena_init(&scratch);
+	Str source = { .str = buf, .len = buf_len };
+	Ast *ast = parse(arena, &scratch, buf, buf_len, parser_error_cb, &source);
+	garena_destroy(&scratch);
+	return ast;
+}
+
+Ast *
+parse_source(ErrorContext *ec, Arena *arena, u8 *buf, size_t buf_len)
+{
+	GArena scratch;
+	garena_init(&scratch);
+	ec->source = buf;
+	ec->source_len = buf_len;
+	Ast *ast = parse(arena, &scratch, buf, buf_len, parser_verror, ec);
+	garena_destroy(&scratch);
+	if (!ast) {
+		longjmp(ec->loc, 1);
+	}
+	return ast;
 }
 
 typedef enum {
@@ -3673,7 +3771,7 @@ main(int argc, char **argv) {
 	}
 
 	if (strcmp(argv[1], "parse") == 0) {
-		Ast *ast = parse(&ec, arena, buf, fsize);
+		Ast *ast = parse_source(&ec, arena, buf, fsize);
 		assert(ast);
 		if (ast->kind == AST_TOP) {
 			ast = ((AstTop *)ast)->expressions[0];
@@ -3681,16 +3779,16 @@ main(int argc, char **argv) {
 		OutputState os = { .f = stdout };
 		write_ast_json(&os, ast, 4, true);
 	} else if (strcmp(argv[1], "parse_top") == 0) {
-		Ast *ast = parse(&ec, arena, buf, fsize);
+		Ast *ast = parse_source(&ec, arena, buf, fsize);
 		assert(ast);
 		OutputState os = { .f = stdout };
 		write_ast_json(&os, ast, 4, true);
 	} else if (strcmp(argv[1], "run_ast") == 0) {
-		Ast *ast = parse(&ec, arena, buf, fsize);
+		Ast *ast = parse_source(&ec, arena, buf, fsize);
 		assert(ast);
 		interpret_ast(&ec, ast);
 	} else if (strcmp(argv[1], "run") == 0) {
-		Ast *ast = parse(&ec, arena, buf, fsize);
+		Ast *ast = parse_source(&ec, arena, buf, fsize);
 		assert(ast);
 		Program program;
 		compile_ast(&ec, arena, &program, ast);
@@ -3700,14 +3798,14 @@ main(int argc, char **argv) {
 		read_program(&ec, arena, &program, buf, fsize);
 		vm_run(&ec, arena, &program);
 	} else if (strcmp(argv[1], "compile") == 0) {
-		Ast *ast = parse(&ec, arena, buf, fsize);
+		Ast *ast = parse_source(&ec, arena, buf, fsize);
 		assert(ast);
 		Program program;
 		compile_ast(&ec, arena, &program, ast);
 		write_program(&program, stdout);
 		fflush(stdout);
 	} else if (strcmp(argv[1], "serde") == 0) {
-		Ast *ast = parse(&ec, arena, buf, fsize);
+		Ast *ast = parse_source(&ec, arena, buf, fsize);
 		assert(ast);
 		Program program;
 		compile_ast(&ec, arena, &program, ast);
@@ -3729,7 +3827,7 @@ main(int argc, char **argv) {
 		read_program(&ec, arena, &program, buf, fsize);
 		disassemble(&program, stdout);
 	} else if (strcmp(argv[1], "dump") == 0) {
-		Ast *ast = parse(&ec, arena, buf, fsize);
+		Ast *ast = parse_source(&ec, arena, buf, fsize);
 		assert(ast);
 		Program program;
 		compile_ast(&ec, arena, &program, ast);
