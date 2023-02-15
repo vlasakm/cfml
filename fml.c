@@ -2952,7 +2952,8 @@ compile(CompilerState *cs, Ast *ast)
 		cs->in_block = true;
 		cs->in_object = false;
 
-		cs->env = env_create(cs->env);
+		// Start with empty environment
+		cs->env = env_create(NULL);
 		env_define(cs->env, STR("this"), make_integer(cs->local_cnt++));
 		for (size_t i = 0; i < function->parameter_cnt; i++) {
 			env_define(cs->env, function->parameters[i], make_integer(cs->local_cnt++));
