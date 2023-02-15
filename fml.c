@@ -3609,22 +3609,17 @@ print_members(Class *class, Program *program, FILE *f)
 		u16 member_name = read_u16(&members);
 		Constant *name = &program->constants[member_name];
 		assert(name->kind == CK_STRING);
-		fprintf(f, "#%"PRIu16":\"%.*s\"", member_name, (int) name->string.len, name->string.str);
+		fprintf(f, "#%"PRIu16"=\"%.*s\"", member_name, (int) name->string.len, name->string.str);
 	}
 }
 
 void
-print_constant_string(Program *program, u8 **ip, FILE *f)
+print_constant(Program *program, u16 constant_index, FILE *f, bool raw)
 {
-	u16 constant_index = read_u16(ip);
+	if (!raw) {
+		fprintf(f, "#%"PRIu16"=", constant_index);
+	}
 	Constant *constant = &program->constants[constant_index];
-	assert(constant->kind == CK_STRING);
-	fprintf(f, "\"%.*s\"", (int) constant->string.len, constant->string.str);
-}
-
-void
-print_constant(Constant *constant, Program *program, FILE *f)
-{
 	switch (constant->kind) {
 	case CK_NULL:
 		fprintf(f, "null");
@@ -3654,7 +3649,7 @@ print_constant(Constant *constant, Program *program, FILE *f)
 				case CK_BOOLEAN:
 				case CK_INTEGER:
 					fprintf(f, "constant ");
-					print_constant(constant, program, f);
+					print_constant(program, constant_index, f, false);
 					break;
 				case CK_FUNCTION:
 					fprintf(f, "function #%"PRIu16, constant_index);
@@ -3685,32 +3680,36 @@ print_constant(Constant *constant, Program *program, FILE *f)
 			}
 			case OP_GET_GLOBAL: {
 				fprintf(f, "get global ");
-				print_constant_string(program, &ip, f);
+				u16 constant_index = read_u16(&ip);
+				print_constant(program, constant_index, f, false);
 				break;
 			}
 			case OP_SET_GLOBAL: {
 				fprintf(f, "set global ");
-				print_constant_string(program, &ip, f);
+				u16 constant_index = read_u16(&ip);
+				print_constant(program, constant_index, f, false);
 				break;
 			}
 			case OP_GET_FIELD: {
 				fprintf(f, "get field ");
-				print_constant_string(program, &ip, f);
+				u16 constant_index = read_u16(&ip);
+				print_constant(program, constant_index, f, false);
 				break;
 			}
 			case OP_SET_FIELD: {
 				fprintf(f, "set field ");
-				print_constant_string(program, &ip, f);
+				u16 constant_index = read_u16(&ip);
+				print_constant(program, constant_index, f, false);
 				break;
 			}
 			case OP_JUMP: {
 				i16 offset = read_u16(&ip);
-				fprintf(f, "jump @%zu (%+"PRIi16")", (size_t)(ip - start) + offset, offset);
+				fprintf(f, "jump %+"PRIi16"=%zu", offset, (size_t)(ip - start) + offset);
 				break;
 			}
 			case OP_BRANCH: {
 				i16 offset = read_u16(&ip);
-				fprintf(f, "branch @%zu (%+"PRIi16")", (size_t)(ip - start) + offset, offset);
+				fprintf(f, "branch %+"PRIi16"=%zu", offset, (size_t)(ip - start) + offset);
 				break;
 			}
 			case OP_CALL_FUNCTION: {
@@ -3720,14 +3719,16 @@ print_constant(Constant *constant, Program *program, FILE *f)
 			}
 			case OP_CALL_METHOD: {
 				fprintf(f, "call method ");
-				print_constant_string(program, &ip, f);
+				u16 constant_index = read_u16(&ip);
+				print_constant(program, constant_index, f, false);
 				u8 argument_cnt = read_u8(&ip);
 				fprintf(f, " %"PRIu8, argument_cnt);
 				break;
 			}
 			case OP_PRINT: {
 				fprintf(f, "print ");
-				print_constant_string(program, &ip, f);
+				u16 constant_index = read_u16(&ip);
+				print_constant(program, constant_index, f, false);
 				u8 argument_cnt = read_u8(&ip);
 				fprintf(f, " %"PRIu8, argument_cnt);
 				break;
@@ -3760,9 +3761,8 @@ disassemble(Program *program, FILE *f)
 {
 	fprintf(f, "Constant Pool:\n");
 	for (size_t i = 0; i < program->constant_cnt; i++) {
-		Constant *constant = &program->constants[i];
 		fprintf(f, "%5zu: ", i);
-		print_constant(constant, program, f);
+		print_constant(program, i, f, true);
 		fprintf(f, "\n");
 	}
 	fprintf(f, "Entry: %"PRIu16"\n", program->entry_point);
