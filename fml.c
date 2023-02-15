@@ -3765,7 +3765,7 @@ disassemble(Program *program, FILE *f)
 		print_constant(program, i, f, true);
 		fprintf(f, "\n");
 	}
-	fprintf(f, "Entry: %"PRIu16"\n", program->entry_point);
+	fprintf(f, "Entry: #%"PRIu16"\n", program->entry_point);
 	fprintf(f, "Globals: ");
 	print_members(&program->global_class, program, f);
 	fprintf(f, "\n");
