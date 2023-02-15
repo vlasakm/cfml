@@ -275,15 +275,6 @@ verror(ErrorContext *ec, const u8 *pos, char *kind, bool fatal, const char *fmt,
 	}
 }
 
-static void
-error(ErrorContext *ec, char *kind, const char *fmt, ...)
-{
-	va_list ap;
-	va_start(ap, fmt);
-	verror(ec, NULL, kind, true, fmt, ap);
-	va_end(ap);
-}
-
 typedef struct {
 	const u8 *pos;
 	const u8 *end;
