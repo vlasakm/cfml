@@ -1270,10 +1270,8 @@ parse(Arena *arena, GArena *scratch, u8 *buf, size_t buf_len, void(*error_callba
 	};
 	discard(&parser);
 
-	size_t save = arena_save(arena);
 	Ast *ast = top(&parser);
 	if (parser.had_error) {
-		arena_restore(arena, save);
 		return NULL;
 	}
 	return ast;
