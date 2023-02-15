@@ -183,6 +183,7 @@ garena_mem(GArena *arena)
 	return arena->mem;
 }
 
+#define garena_array(arena, type) ((type *)garena_mem((arena)))
 #define garena_array_from(arena, start, type) ((type *)garena_from((arena), (start), alignof(type)))
 void *
 garena_from(GArena *arena, size_t start, size_t alignment)
@@ -2701,7 +2702,7 @@ add_constant(CompilerState *cs, Constant constant)
 {
 	size_t index = garena_cnt(&cs->constants, Constant);
 	for (size_t i = index; i--;) {
-		if (constant_eq(&((Constant *) garena_mem(&cs->constants))[i], &constant)) {
+		if (constant_eq(&garena_array(&cs->constants, Constant)[i], &constant)) {
 			return i;
 		}
 	}
@@ -2719,6 +2720,34 @@ add_string(CompilerState *cs, Str name)
 	       .kind = CK_STRING,
 	       .string = name,
 	});
+}
+
+static Class
+create_class(CompilerState *cs, size_t start)
+{
+	size_t member_cnt = garena_cnt_from(&cs->members, u16, start);
+	u16 *members = move_to_arena(cs->arena, &cs->members, start, u16);
+	for (size_t i = 0; i < member_cnt; i++) {
+		for (size_t j = i + 1; j < member_cnt; j++) {
+			// can be constant index comparison since we deduplicate
+			// constants
+			if (members[i] != members[j]) {
+				continue;
+			}
+			const char *type = cs->in_object ? "Member" : "Global";
+			Str name = garena_array(&cs->constants, Constant)[members[i]].string;
+			if (members[i] == members[j]) {
+				compile_error(cs, "%s '%.*s' already defined", type, (int) name.len, name.str);
+			}
+		}
+	}
+	// NOTE: due to losing alignment when serializing, we refer to
+	// members with `u8` pointers while compiling them as if they
+	// were u16
+	return (Class) {
+		.member_cnt = member_cnt,
+		.members = (u8 *) members,
+	};
 }
 
 static void
@@ -2896,20 +2925,11 @@ compile(CompilerState *cs, Ast *ast)
 			default: UNREACHABLE();
 			}
 		}
-		op(cs, OP_OBJECT);
 
-		// NOTE: due to losing alignment when serializing, we refer to
-		// members with `u8` pointers while compiling them as if they
-		// were u16
-		size_t member_cnt = garena_cnt_from(&cs->members, u16, start);
-		u16 *members = move_to_arena(cs->arena, &cs->members, start, u16);
-		inst_constant(cs, (Constant) {
-		       .kind = CK_CLASS,
-		       .class = (Class) {
-				.member_cnt = member_cnt,
-				.members = (u8 *) members,
-			},
-		});
+		Class class = create_class(cs, start);
+		u16 class_index = add_constant(cs, (Constant) { .kind = CK_CLASS, .class = class });
+		op_index(cs, OP_OBJECT, class_index);
+
 		cs->in_object = saved_in_object;
 		cs->in_definition = saved_in_definition;
 		return;
@@ -3165,12 +3185,7 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	program->constant_cnt = garena_cnt(&cs.constants, Constant);
 	program->constants = move_to_arena(cs.arena, &cs.constants, 0, Constant);
 
-	size_t member_cnt = garena_cnt_from(&cs.members, u16, start);
-	u16 *members = move_to_arena(cs.arena, &cs.members, start, u16);
-	program->global_class = (Class) {
-		.members = (u8 *) members,
-		.member_cnt = member_cnt,
-	};
+	program->global_class = create_class(&cs, 0);
 
 	program->entry_point = entry_point;
 
