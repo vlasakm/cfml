@@ -830,7 +830,7 @@ nullerr(Parser *parser)
 {
 	TokenKind tok = peek(parser);
 	parser_error(parser, parser->lookahead, true, "Invalid start of expression %s", tok_repr[tok]);
-	return NULL;
+	return create_null(parser);
 }
 
 static Ast *
@@ -1042,7 +1042,7 @@ lefterr(Parser *parser, Ast *left, int rbp)
 	// Set the current token to something with low binding power to not get
 	// into infinite loop of `lefterr`s on the same token.
 	parser->lookahead.kind = TK_EOF;
-	return NULL;
+	return create_null(parser);
 }
 
 static Ast *
