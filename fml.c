@@ -275,12 +275,12 @@ verror(ErrorContext *ec, const u8 *pos, char *kind, bool fatal, const char *fmt,
 	}
 }
 
-static void __attribute__((format(printf, 5, 6)))
-error(ErrorContext *ec, const u8 *pos, char *kind, bool fatal, const char *fmt, ...)
+static void
+error(ErrorContext *ec, char *kind, const char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
-	verror(ec, pos, kind, fatal, fmt, ap);
+	verror(ec, NULL, kind, true, fmt, ap);
 	va_end(ap);
 }
 
@@ -2671,7 +2671,18 @@ typedef struct {
 	bool in_definition;
 	Environment *env;
 	u16 local_cnt;
+	bool had_error;
 } CompilerState;
+
+static void
+compile_error(CompilerState *cs, const char *msg, ...)
+{
+	va_list ap;
+	va_start(ap, msg);
+	cs->had_error = true;
+	verror(cs->ec, NULL, "compile", false, msg, ap);
+	va_end(ap);
+}
 
 static size_t
 inst_pos(CompilerState *cs)
@@ -2704,8 +2715,8 @@ add_constant(CompilerState *cs, Constant constant)
 		}
 	}
 	garena_push_value(&cs->constants, Constant, constant);
-	if (index > 0xFFFF) {
-		error(cs->ec, NULL, "compile", true, "Too many constants (only 65536 allowed)");
+	if (index == 0x10000) {
+		compile_error(cs, "Too many constants (only 65536 allowed)");
 	}
 	return index;
 }
@@ -2779,7 +2790,7 @@ jump_fixup(CompilerState *cs, size_t pos, size_t target)
 {
 	int diff = target - (pos + 2);
 	if (diff > INT16_MAX || diff < INT16_MIN) {
-		error(cs->ec, NULL, "compile", true, "Jump offset too large (%d, allowed %d to %d)", diff, INT16_MIN, INT16_MAX);
+		compile_error(cs, "Jump offset too large (%d, allowed %d to %d)", diff, INT16_MIN, INT16_MAX);
 	}
 	u16 offset = (i16) diff;
 	u8 *dest = garena_mem(&cs->instructions);
@@ -2963,7 +2974,7 @@ compile(CompilerState *cs, Ast *ast)
 			if (!cs->in_object) {
 				op_string(cs, OP_SET_GLOBAL, definition->name);
 			} else if (cs->in_definition) {
-				error(cs->ec, NULL, "compile", true, "Nested definition in definition in object not allowed");
+				compile_error(cs, "Nested definition (in definition) in object not allowed");
 			}
 		} else {
 			env_define(cs->env, definition->name, make_integer(cs->local_cnt));
@@ -3176,6 +3187,10 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	garena_destroy(&cs.constants);
 	garena_destroy(&cs.instructions);
 	garena_destroy(&cs.members);
+
+	if (cs.had_error) {
+		longjmp(cs.ec->loc, 1);
+	}
 }
 
 static void
