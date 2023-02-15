@@ -1981,7 +1981,9 @@ interpret(InterpreterState *is, Ast *ast)
 		Array *array_obj = value_as_array(array_value);
 		Environment *saved_env = is->env;
 		for (size_t i = 0; i < size; i++) {
+			is->env = env_create(saved_env);
 			array_obj->values[i] = interpret(is, array->initializer);
+			env_destroy(is->env);
 			is->env = saved_env;
 		}
 		return array_value;
@@ -2892,7 +2894,11 @@ compile(CompilerState *cs, Ast *ast)
 		jump(cs, OP_JUMP, &condition_to_after);
 		size_t init = inst_pos(cs);
 		op_index(cs, OP_GET_LOCAL, i_var);
+		Environment *saved_environment = cs->env;
+		cs->env = env_create(cs->env);
 		compile(cs, array->initializer);
+		env_destroy(cs->env);
+		cs->env = saved_environment;
 		op_string_cnt(cs, OP_CALL_METHOD, STR("set"), 3);
 		op(cs, OP_DROP);
 		op_index(cs, OP_GET_LOCAL, i_var);
