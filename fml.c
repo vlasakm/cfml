@@ -3920,7 +3920,7 @@ end:
 		size_t col = pos - line_start;
 		const u8 *source_end = ec.source.str + ec.source.len;
 		const u8 *line_end = pos;
-		for (; line_end < source_end && *line_end != '\n'; line_end++);
+		for (; line_end < source_end && *line_end != '\n'; line_end++) {}
 		fprintf(stderr, "[%zu:%zu]: %s error: %s\n", line + 1, col + 1, err->kind, err->msg);
 		fprintf(stderr, "  %.*s\n", (int) (line_end - line_start), line_start);
 		fprintf(stderr, "  %*s\n", (int) (pos - line_start + 1), "^");
