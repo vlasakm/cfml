@@ -90,7 +90,7 @@ void
 arena_restore(Arena *arena, size_t pos)
 {
 	ArenaChunk *chunk = arena->current;
-	while (chunk && pos < arena->prev_size_sum) {
+	while (pos < arena->prev_size_sum) {
 		ArenaChunk *prev = chunk->prev;
 		free(chunk);
 		chunk = prev;
