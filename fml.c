@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <inttypes.h>
 #include <setjmp.h>
+#include <errno.h>
 
 #define PROJECT_NAME "fml"
 
@@ -247,19 +248,27 @@ struct Error {
 };
 
 typedef struct {
-	Arena *arena;
-	const u8 *source;
-	size_t source_len;
+	Arena arena;
+	Str source;
 	Error *error_head;
 	Error *error_tail;
 	jmp_buf loc;
 } ErrorContext;
 
+void
+error_context_init(ErrorContext *ec)
+{
+	arena_init(&ec->arena);
+	ec->source = (Str) {0};
+	ec->error_head = NULL;
+	ec->error_tail = NULL;
+}
+
 static void
 verror(ErrorContext *ec, const u8 *pos, char *kind, bool fatal, const char *fmt, va_list ap)
 {
-	Error *error = arena_alloc(ec->arena, sizeof(*error));
-	error->msg = arena_vaprintf(ec->arena, fmt, ap);
+	Error *error = arena_alloc(&ec->arena, sizeof(*error));
+	error->msg = arena_vaprintf(&ec->arena, fmt, ap);
 	error->pos = pos;
 	error->kind = kind;
 	error->next = NULL;
@@ -403,11 +412,11 @@ typedef struct {
 } Token;
 
 Lexer
-lex_create(const u8 *buf, size_t size)
+lex_create(Str source)
 {
 	return (Lexer) {
-		.pos = buf,
-		.end = buf + size,
+		.pos = source.str,
+		.end = source.str + source.len,
 	};
 }
 
@@ -692,7 +701,7 @@ typedef struct {
 	Arena *arena;
 	GArena *scratch;
 	void *user_data;
-	void(*error_callback)(void *user_data, const u8 *err_pos, const char *msg, va_list ap);
+	void (*error_callback)(void *user_data, const u8 *err_pos, const char *msg, va_list ap);
 	Lexer lexer;
 	Token lookahead;
 	Token prev;
@@ -1248,14 +1257,14 @@ parser_error_cb(void *user_data, const u8 *err_pos, const char *msg, va_list ap)
 }
 
 Ast *
-parse(Arena *arena, GArena *scratch, u8 *buf, size_t buf_len, void(*error_callback)(void *user_data, const u8 *err_pos, const char *msg, va_list ap), void *user_data)
+parse(Arena *arena, GArena *scratch, Str source, void (*error_callback)(void *user_data, const u8 *err_pos, const char *msg, va_list ap), void *user_data)
 {
 	Parser parser = {
 		.arena = arena,
 		.scratch = scratch,
 		.user_data = user_data,
 		.error_callback = error_callback,
-		.lexer = lex_create(buf, buf_len),
+		.lexer = lex_create(source),
 		.had_error = false,
 		.panic_mode = false,
 	};
@@ -1276,26 +1285,26 @@ parser_verror(void *user_data, const u8 *err_pos, const char *msg, va_list ap)
 }
 
 Ast *
-parse_src(Arena *arena, u8 *buf, size_t buf_len)
+parse_src(Arena *arena, Str source)
 {
 	GArena scratch;
 	garena_init(&scratch);
-	Str source = { .str = buf, .len = buf_len };
-	Ast *ast = parse(arena, &scratch, buf, buf_len, parser_error_cb, &source);
+	Ast *ast = parse(arena, &scratch, source, parser_error_cb, &source);
 	garena_destroy(&scratch);
 	return ast;
 }
 
 Ast *
-parse_source(ErrorContext *ec, Arena *arena, u8 *buf, size_t buf_len)
+parse_source(ErrorContext *ec, Arena *arena, Str source)
 {
+	size_t arena_start = arena_save(arena);
 	GArena scratch;
 	garena_init(&scratch);
-	ec->source = buf;
-	ec->source_len = buf_len;
-	Ast *ast = parse(arena, &scratch, buf, buf_len, parser_verror, ec);
+	ec->source = source;
+	Ast *ast = parse(arena, &scratch, source, parser_verror, ec);
 	garena_destroy(&scratch);
 	if (!ast) {
+		arena_restore(arena, arena_start);
 		longjmp(ec->loc, 1);
 	}
 	return ast;
@@ -3155,6 +3164,7 @@ compile(CompilerState *cs, Ast *ast)
 void
 compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 {
+	size_t arena_start = arena_save(arena);
 	CompilerState cs = {
 		.ec = ec,
 		.arena = arena,
@@ -3201,6 +3211,7 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	garena_destroy(&cs.members);
 
 	if (cs.had_error) {
+		arena_restore(arena, arena_start);
 		longjmp(cs.ec->loc, 1);
 	}
 }
@@ -3770,90 +3781,122 @@ disassemble(Program *program, FILE *f)
 	fprintf(f, "\n");
 }
 
+static void
+argument_error(ErrorContext *ec, const char *msg, ...)
+{
+	va_list ap;
+	va_start(ap, msg);
+	verror(ec, NULL, "argument", true, msg, ap);
+	va_end(ap);
+}
+
+
+Str
+read_file(ErrorContext *ec, Arena *arena, const char *name)
+{
+	errno = 0;
+	FILE *f = fopen(name, "rb");
+	if (!f) {
+		argument_error(ec, "Failed to open file '%s': %s", name, strerror(errno));
+	}
+	if (fseek(f, 0, SEEK_END) != 0) {
+		argument_error(ec, "Failed seek in file '%s': %s", name, strerror(errno));
+	}
+	size_t fsize = ftell(f);
+	assert(fseek(f, 0, SEEK_SET) == 0);
+	u8 *buf = arena_alloc(arena, fsize);
+	size_t read;
+	if ((read = fread(buf, 1, fsize, f)) != fsize) {
+		if (feof(f)) {
+			fsize = read;
+		} else {
+			argument_error(ec, "Failed to read file '%s'", name);
+		}
+	}
+	assert(fclose(f) == 0);
+	return (Str) { .str = buf, .len = fsize };
+}
+
+void
+print_help(FILE *f)
+{
+	fprintf(f,
+		"Usage:\n"
+		"    fml -h                 Print this message.\n"
+		"    fml --help             Print this message.\n"
+		"    fml help               Print this message.\n"
+		"    fml parse FILE         Parse a single expression from fml source FILE.\n"
+		"    fml parse_top FILE     Parse a full program from fml source FILE.\n"
+		"    fml run_ast FILE       Parse fml source FILE and interpret the AST.\n"
+		"    fml run FILE           Parse from fml source FILE, compile it to bytecode and execute it.\n"
+		"    fml execute FILE       Parse bytecode from FILE and execut it.\n"
+		"    fml compile FILE       Parse fml source FILE and compile it to bytecode\n"
+		"    fml disassemble FILE   Parse bytecode from FILE and print bytecode disassembly.\n"
+		"    fml dump FILE          Parse fml source FILE, compile it and bytecode disassembly.\n"
+	);
+}
+
 int
-main(int argc, char **argv) {
+main(int argc, const char **argv) {
+	if (argc == 2 && (strcmp(argv[1], "-h") == 0
+			|| strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "help") == 0)) {
+		print_help(stdout);
+		return EXIT_SUCCESS;
+	}
+
+	if (argc < 3) {
+		fprintf(stderr, "Expected a command and file as arguments\n");
+		print_help(stderr);
+		return EXIT_FAILURE;
+	}
 
 	Arena arena_;
 	Arena *arena = &arena_;
 	arena_init(arena);
-	if(argc != 3) {
-		return 1;
-	}
-	FILE *f = fopen(argv[2], "rb");
-	fseek(f, 0, SEEK_END);
-	long fsize = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	u8 *buf = arena_alloc(arena, fsize);
-	fread(buf, fsize, 1, f);
-	fclose(f);
 
-	ErrorContext ec = {
-		.arena = arena,
-	};
+	ErrorContext ec;
+	error_context_init(&ec);
 
 	if (setjmp(ec.loc) != 0) {
 		goto end;
 	}
+	Str source = read_file(&ec, arena, argv[2]);
 
 	if (strcmp(argv[1], "parse") == 0) {
-		Ast *ast = parse_source(&ec, arena, buf, fsize);
-		assert(ast);
+		Ast *ast = parse_source(&ec, arena, source);
 		if (ast->kind == AST_TOP) {
 			ast = ((AstTop *)ast)->expressions[0];
 		}
 		OutputState os = { .f = stdout };
 		write_ast(&os, ast, 4, true);
 	} else if (strcmp(argv[1], "parse_top") == 0) {
-		Ast *ast = parse_source(&ec, arena, buf, fsize);
-		assert(ast);
+		Ast *ast = parse_source(&ec, arena, source);
 		OutputState os = { .f = stdout };
 		write_ast(&os, ast, 4, true);
 	} else if (strcmp(argv[1], "run_ast") == 0) {
-		Ast *ast = parse_source(&ec, arena, buf, fsize);
-		assert(ast);
+		Ast *ast = parse_source(&ec, arena, source);
 		interpret_ast(&ec, ast);
 	} else if (strcmp(argv[1], "run") == 0) {
-		Ast *ast = parse_source(&ec, arena, buf, fsize);
-		assert(ast);
+		Ast *ast = parse_source(&ec, arena, source);
 		Program program;
 		compile_ast(&ec, arena, &program, ast);
 		vm_run(&ec, arena, &program);
 	} else if (strcmp(argv[1], "execute") == 0) {
 		Program program;
-		read_program(&ec, arena, &program, buf, fsize);
+		read_program(&ec, arena, &program, (u8 *) source.str, source.len);
 		vm_run(&ec, arena, &program);
 	} else if (strcmp(argv[1], "compile") == 0) {
-		Ast *ast = parse_source(&ec, arena, buf, fsize);
-		assert(ast);
+		Ast *ast = parse_source(&ec, arena, source);
 		Program program;
 		compile_ast(&ec, arena, &program, ast);
 		write_program(&program, stdout);
 		fflush(stdout);
-	} else if (strcmp(argv[1], "serde") == 0) {
-		Ast *ast = parse_source(&ec, arena, buf, fsize);
-		assert(ast);
-		Program program;
-		compile_ast(&ec, arena, &program, ast);
-		FILE *f = fopen("out.bc", "wb");
-		write_program(&program, f);
-		fclose(f);
-		f = fopen("out.bc", "rb");
-		fseek(f, 0, SEEK_END);
-		long fsize = ftell(f);
-		fseek(f, 0, SEEK_SET);
-		u8 *buf = arena_alloc(arena, fsize);
-		fread(buf, fsize, 1, f);
-		fclose(f);
-		Program program2;
-		read_program(&ec, arena, &program2, buf, fsize);
-		vm_run(&ec, arena, &program2);
 	} else if (strcmp(argv[1], "disassemble") == 0) {
 		Program program;
-		read_program(&ec, arena, &program, buf, fsize);
+		read_program(&ec, arena, &program, (u8 *) source.str, source.len);
 		disassemble(&program, stdout);
 	} else if (strcmp(argv[1], "dump") == 0) {
-		Ast *ast = parse_source(&ec, arena, buf, fsize);
-		assert(ast);
+		Ast *ast = parse_source(&ec, arena, source);
 		Program program;
 		compile_ast(&ec, arena, &program, ast);
 		disassemble(&program, stdout);
@@ -3865,9 +3908,9 @@ end:
 			fprintf(stderr, "%s error: %s\n", err->kind, err->msg);
 			continue;
 		}
-		const u8 *line_start = ec.source;
+		const u8 *line_start = ec.source.str;
 		size_t line = 0;
-		const u8 *pos = ec.source;
+		const u8 *pos = ec.source.str;
 		for (; pos < err->pos; pos++) {
 			if (*pos == '\n') {
 				line_start = pos + 1;
@@ -3875,7 +3918,7 @@ end:
 			}
 		}
 		size_t col = pos - line_start;
-		const u8 *source_end = ec.source + ec.source_len;
+		const u8 *source_end = ec.source.str + ec.source.len;
 		const u8 *line_end = pos;
 		for (; line_end < source_end && *line_end != '\n'; line_end++);
 		fprintf(stderr, "[%zu:%zu]: %s error: %s\n", line + 1, col + 1, err->kind, err->msg);
@@ -3887,6 +3930,7 @@ end:
 		free(last);
 		last = prev;
 	}
+	arena_destroy(&ec.arena);
 	arena_destroy(arena);
 	return ec.error_head ? EXIT_FAILURE : EXIT_SUCCESS;
 }
