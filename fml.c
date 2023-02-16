@@ -3311,190 +3311,190 @@ const char *ast_kind_repr[] = {
 };
 
 void
-write_ast_json_begin(OutputState *os, char *name, AstKind kind, int indent, bool first)
+write_ast_begin(OutputState *os, char *name, AstKind kind, int indent, bool first)
 {
 	fprintf(os->f, "%s(Ast%s) {\n", first ? "" : "&", name);
 	fprintf(os->f, "%*s.base = (Ast) { .kind = %s },\n", indent, "", ast_kind_repr[kind]);
 }
 void
-write_ast_json_end(OutputState *os, int indent, bool first)
+write_ast_end(OutputState *os, int indent, bool first)
 {
 	fprintf(os->f, "%*s}%s\n", indent - 4, "", first ? "" : ".base,");
 }
-void write_ast_json_field(OutputState *os, char *name, Ast *value, int indent);
-void write_ast_json_field_string(OutputState *os, char *name, Str string, int indent);
-void write_ast_json_field_boolean(OutputState *os, char *name, bool value, int indent);
-void write_ast_json_field_integer(OutputState *os, char *name, i32 value, int indent);
-void write_ast_json_field_array(OutputState *os, char *name, Ast **values, size_t value_cnt, int indent);
-void write_ast_json_field_string_array(OutputState *os, char *name, Str *values, size_t value_cnt, int indent);
+void write_ast_field(OutputState *os, char *name, Ast *value, int indent);
+void write_ast_field_string(OutputState *os, char *name, Str string, int indent);
+void write_ast_field_boolean(OutputState *os, char *name, bool value, int indent);
+void write_ast_field_integer(OutputState *os, char *name, i32 value, int indent);
+void write_ast_field_array(OutputState *os, char *name, Ast **values, size_t value_cnt, int indent);
+void write_ast_field_string_array(OutputState *os, char *name, Str *values, size_t value_cnt, int indent);
 
 void
-write_ast_json(OutputState *os, Ast *ast, int indent, bool first)
+write_ast(OutputState *os, Ast *ast, int indent, bool first)
 {
 	//indent += 4;
 	switch (ast->kind) {
 	case AST_NULL: {
 		//AstNull *null = (AstNull *) ast;
-		write_ast_json_begin(os, "Null", ast->kind, indent, first);
+		write_ast_begin(os, "Null", ast->kind, indent, first);
 		//fprintf(os->f, "null");
-		write_ast_json_end(os, indent, first);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_BOOLEAN: {
 		AstBoolean *boolean = (AstBoolean *) ast;
-		write_ast_json_begin(os, "Boolean", ast->kind, indent, first);
-		write_ast_json_field_boolean(os, "value", boolean->value, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "Boolean", ast->kind, indent, first);
+		write_ast_field_boolean(os, "value", boolean->value, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_INTEGER: {
 		AstInteger *integer = (AstInteger *) ast;
-		write_ast_json_begin(os, "Integer", ast->kind, indent, first);
-		write_ast_json_field_integer(os, "value", integer->value, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "Integer", ast->kind, indent, first);
+		write_ast_field_integer(os, "value", integer->value, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_ARRAY: {
 		AstArray *array = (AstArray *) ast;
-		write_ast_json_begin(os, "Array", ast->kind, indent, first);
-		write_ast_json_field(os, "size", array->size, indent);
-		write_ast_json_field(os, "initializer", array->initializer, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "Array", ast->kind, indent, first);
+		write_ast_field(os, "size", array->size, indent);
+		write_ast_field(os, "initializer", array->initializer, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_OBJECT: {
 		AstObject *object = (AstObject *) ast;
-		write_ast_json_begin(os, "Object", ast->kind, indent, first);
-		write_ast_json_field(os, "extends", object->extends, indent);
-		write_ast_json_field_array(os, "member", object->members, object->member_cnt, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "Object", ast->kind, indent, first);
+		write_ast_field(os, "extends", object->extends, indent);
+		write_ast_field_array(os, "member", object->members, object->member_cnt, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_FUNCTION: {
 		AstFunction *function = (AstFunction *) ast;
-		write_ast_json_begin(os, "Function", ast->kind, indent, first);
-		write_ast_json_field(os, "body", function->body, indent);
-		write_ast_json_field_string_array(os, "parameter", function->parameters, function->parameter_cnt, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "Function", ast->kind, indent, first);
+		write_ast_field(os, "body", function->body, indent);
+		write_ast_field_string_array(os, "parameter", function->parameters, function->parameter_cnt, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 
 	case AST_DEFINITION: {
 		AstDefinition *definition = (AstDefinition *) ast;
-		write_ast_json_begin(os, "Definition", ast->kind, indent, first);
-		write_ast_json_field_string(os, "name", definition->name, indent);
-		write_ast_json_field(os, "value", definition->value, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "Definition", ast->kind, indent, first);
+		write_ast_field_string(os, "name", definition->name, indent);
+		write_ast_field(os, "value", definition->value, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 
 	case AST_VARIABLE_ACCESS: {
 		AstVariableAccess *variable_access = (AstVariableAccess *) ast;
-		write_ast_json_begin(os, "VariableAccess", ast->kind, indent, first);
-		write_ast_json_field_string(os, "name", variable_access->name, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "VariableAccess", ast->kind, indent, first);
+		write_ast_field_string(os, "name", variable_access->name, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_VARIABLE_ASSIGNMENT: {
 		AstVariableAssignment *variable_assignment = (AstVariableAssignment *) ast;
-		write_ast_json_begin(os, "VariableAssignment", ast->kind, indent, first);
-		write_ast_json_field_string(os, "name", variable_assignment->name, indent);
-		write_ast_json_field(os, "value", variable_assignment->value, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "VariableAssignment", ast->kind, indent, first);
+		write_ast_field_string(os, "name", variable_assignment->name, indent);
+		write_ast_field(os, "value", variable_assignment->value, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 
 	case AST_INDEX_ACCESS: {
 		AstIndexAccess *index_access = (AstIndexAccess *) ast;
-		write_ast_json_begin(os, "IndexAccess", ast->kind, indent, first);
-		write_ast_json_field(os, "object", index_access->object, indent);
-		write_ast_json_field(os, "index", index_access->index, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "IndexAccess", ast->kind, indent, first);
+		write_ast_field(os, "object", index_access->object, indent);
+		write_ast_field(os, "index", index_access->index, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_INDEX_ASSIGNMENT: {
 		AstIndexAssignment *index_assignment = (AstIndexAssignment *) ast;
-		write_ast_json_begin(os, "IndexAssignment", ast->kind, indent, first);
-		write_ast_json_field(os, "object", index_assignment->object, indent);
-		write_ast_json_field(os, "index", index_assignment->index, indent);
-		write_ast_json_field(os, "value", index_assignment->value, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "IndexAssignment", ast->kind, indent, first);
+		write_ast_field(os, "object", index_assignment->object, indent);
+		write_ast_field(os, "index", index_assignment->index, indent);
+		write_ast_field(os, "value", index_assignment->value, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 
 	case AST_FIELD_ACCESS: {
 		AstFieldAccess *field_access = (AstFieldAccess *) ast;
-		write_ast_json_begin(os, "FieldAccess", ast->kind, indent, first);
-		write_ast_json_field(os, "object", field_access->object, indent);
-		write_ast_json_field_string(os, "field", field_access->field, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "FieldAccess", ast->kind, indent, first);
+		write_ast_field(os, "object", field_access->object, indent);
+		write_ast_field_string(os, "field", field_access->field, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_FIELD_ASSIGNMENT: {
 		AstFieldAssignment *field_assignment = (AstFieldAssignment *) ast;
-		write_ast_json_begin(os, "FieldAssignment", ast->kind, indent, first);
-		write_ast_json_field(os, "object", field_assignment->object, indent);
-		write_ast_json_field_string(os, "field", field_assignment->field, indent);
-		write_ast_json_field(os, "value", field_assignment->value, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "FieldAssignment", ast->kind, indent, first);
+		write_ast_field(os, "object", field_assignment->object, indent);
+		write_ast_field_string(os, "field", field_assignment->field, indent);
+		write_ast_field(os, "value", field_assignment->value, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 
 	case AST_FUNCTION_CALL: {
 		AstFunctionCall *function_call = (AstFunctionCall *) ast;
-		write_ast_json_begin(os, "FunctionCall", ast->kind, indent, first);
-		write_ast_json_field(os, "function", function_call->function, indent);
-		write_ast_json_field_array(os, "argument", function_call->arguments, function_call->argument_cnt, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "FunctionCall", ast->kind, indent, first);
+		write_ast_field(os, "function", function_call->function, indent);
+		write_ast_field_array(os, "argument", function_call->arguments, function_call->argument_cnt, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_METHOD_CALL: {
 		AstMethodCall *method_call = (AstMethodCall *) ast;
-		write_ast_json_begin(os, "MethodCall", ast->kind, indent, first);
-		write_ast_json_field(os, "object", method_call->object, indent);
-		write_ast_json_field_string(os, "name", method_call->name, indent);
-		write_ast_json_field_array(os, "argument", method_call->arguments, method_call->argument_cnt, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "MethodCall", ast->kind, indent, first);
+		write_ast_field(os, "object", method_call->object, indent);
+		write_ast_field_string(os, "name", method_call->name, indent);
+		write_ast_field_array(os, "argument", method_call->arguments, method_call->argument_cnt, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 
 	case AST_CONDITIONAL: {
 		AstConditional *conditional = (AstConditional *) ast;
-		write_ast_json_begin(os, "Conditional", ast->kind, indent, first);
-		write_ast_json_field(os, "condition", conditional->condition, indent);
-		write_ast_json_field(os, "consequent", conditional->consequent, indent);
-		write_ast_json_field(os, "alternative", conditional->alternative, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "Conditional", ast->kind, indent, first);
+		write_ast_field(os, "condition", conditional->condition, indent);
+		write_ast_field(os, "consequent", conditional->consequent, indent);
+		write_ast_field(os, "alternative", conditional->alternative, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_LOOP: {
 		AstLoop *loop = (AstLoop *) ast;
-		write_ast_json_begin(os, "Loop", ast->kind, indent, first);
-		write_ast_json_field(os, "condition", loop->condition, indent);
-		write_ast_json_field(os, "body", loop->body, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "Loop", ast->kind, indent, first);
+		write_ast_field(os, "condition", loop->condition, indent);
+		write_ast_field(os, "body", loop->body, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_PRINT: {
 		AstPrint *print = (AstPrint *) ast;
-		write_ast_json_begin(os, "Print", ast->kind, indent, first);
-		write_ast_json_field_string(os, "format", print->format, indent);
-		write_ast_json_field_array(os, "argument", print->arguments, print->argument_cnt, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_begin(os, "Print", ast->kind, indent, first);
+		write_ast_field_string(os, "format", print->format, indent);
+		write_ast_field_array(os, "argument", print->arguments, print->argument_cnt, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_BLOCK: {
-		write_ast_json_begin(os, "Block", ast->kind, indent, first);
+		write_ast_begin(os, "Block", ast->kind, indent, first);
 		AstBlock *block = (AstBlock *) ast;
-		write_ast_json_field_array(os, "expression", block->expressions, block->expression_cnt, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_field_array(os, "expression", block->expressions, block->expression_cnt, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	case AST_TOP: {
-		write_ast_json_begin(os, "Top", ast->kind, indent, first);
+		write_ast_begin(os, "Top", ast->kind, indent, first);
 		AstTop *top = (AstTop *) ast;
-		write_ast_json_field_array(os, "expression", top->expressions, top->expression_cnt, indent);
-		write_ast_json_end(os, indent, first);
+		write_ast_field_array(os, "expression", top->expressions, top->expression_cnt, indent);
+		write_ast_end(os, indent, first);
 		return;
 	}
 	}
@@ -3502,26 +3502,26 @@ write_ast_json(OutputState *os, Ast *ast, int indent, bool first)
 }
 
 void
-write_ast_json_key(OutputState *os, char *key, int indent)
+write_ast_key(OutputState *os, char *key, int indent)
 {
 	fprintf(os->f, "%*s.%s = ", indent, "", key);
 }
 
 void
-write_ast_json_keys(OutputState *os, char *key, char *type, int indent)
+write_ast_keys(OutputState *os, char *key, char *type, int indent)
 {
 	fprintf(os->f, "%*s.%ss = (%s[]) {", indent, "", key, type);
 }
 
 void
-write_ast_json_field(OutputState *os, char *name, Ast *value, int indent)
+write_ast_field(OutputState *os, char *name, Ast *value, int indent)
 {
-	write_ast_json_key(os, name, indent);
-	write_ast_json(os, value, indent + 4, false);
+	write_ast_key(os, name, indent);
+	write_ast(os, value, indent + 4, false);
 }
 
 void
-write_ast_json_string(OutputState *os, Str string)
+write_ast_string(OutputState *os, Str string)
 {
 	fprintf(os->f, "STR(\"");
 	for (size_t i = 0; i < string.len; i++) {
@@ -3535,33 +3535,33 @@ write_ast_json_string(OutputState *os, Str string)
 }
 
 void
-write_ast_json_field_string(OutputState *os, char *name, Str value, int indent)
+write_ast_field_string(OutputState *os, char *name, Str value, int indent)
 {
-	write_ast_json_key(os, name, indent);
-	write_ast_json_string(os, value);
+	write_ast_key(os, name, indent);
+	write_ast_string(os, value);
 	fprintf(os->f, ",\n");
 }
 
 void
-write_ast_json_field_boolean(OutputState *os, char *name, bool value, int indent)
+write_ast_field_boolean(OutputState *os, char *name, bool value, int indent)
 {
-	write_ast_json_key(os, name, indent);
+	write_ast_key(os, name, indent);
 	fprintf(os->f, value ? "true" : "false");
 	fprintf(os->f, ",\n");
 }
 
 void
-write_ast_json_field_integer(OutputState *os, char *name, i32 value, int indent)
+write_ast_field_integer(OutputState *os, char *name, i32 value, int indent)
 {
-	write_ast_json_key(os, name, indent);
+	write_ast_key(os, name, indent);
 	fprintf(os->f, "%"PRIi32, value);
 	fprintf(os->f, ",\n");
 }
 
 void
-write_ast_json_field_array(OutputState *os, char *name, Ast **values, size_t value_cnt, int indent)
+write_ast_field_array(OutputState *os, char *name, Ast **values, size_t value_cnt, int indent)
 {
-	write_ast_json_keys(os, name, "Ast*", indent);
+	write_ast_keys(os, name, "Ast*", indent);
 	if (value_cnt == 0) {
 		fprintf(os->f, "},\n");
 	} else {
@@ -3569,7 +3569,7 @@ write_ast_json_field_array(OutputState *os, char *name, Ast **values, size_t val
 		indent += 4;
 		for (size_t i = 0; i < value_cnt; i++) {
 			fprintf(os->f, "%*s", indent, "");
-			write_ast_json(os, values[i], indent + 4, false);
+			write_ast(os, values[i], indent + 4, false);
 		}
 		indent -= 4;
 		fprintf(os->f, "%*s},\n", indent, "");
@@ -3578,9 +3578,9 @@ write_ast_json_field_array(OutputState *os, char *name, Ast **values, size_t val
 }
 
 void
-write_ast_json_field_string_array(OutputState *os, char *name, Str *strings, size_t string_cnt, int indent)
+write_ast_field_string_array(OutputState *os, char *name, Str *strings, size_t string_cnt, int indent)
 {
-	write_ast_json_keys(os, name, "Str", indent);
+	write_ast_keys(os, name, "Str", indent);
 	if (string_cnt == 0) {
 		fprintf(os->f, "},\n");
 	} else {
@@ -3588,7 +3588,7 @@ write_ast_json_field_string_array(OutputState *os, char *name, Str *strings, siz
 		indent += 4;
 		for (size_t i = 0; i < string_cnt; i++) {
 			fprintf(os->f, "%*s", indent, "");
-			write_ast_json_string(os, strings[i]);
+			write_ast_string(os, strings[i]);
 			fprintf(os->f, ",\n");
 		}
 		indent -= 4;
@@ -3802,12 +3802,12 @@ main(int argc, char **argv) {
 			ast = ((AstTop *)ast)->expressions[0];
 		}
 		OutputState os = { .f = stdout };
-		write_ast_json(&os, ast, 4, true);
+		write_ast(&os, ast, 4, true);
 	} else if (strcmp(argv[1], "parse_top") == 0) {
 		Ast *ast = parse_source(&ec, arena, buf, fsize);
 		assert(ast);
 		OutputState os = { .f = stdout };
-		write_ast_json(&os, ast, 4, true);
+		write_ast(&os, ast, 4, true);
 	} else if (strcmp(argv[1], "run_ast") == 0) {
 		Ast *ast = parse_source(&ec, arena, buf, fsize);
 		assert(ast);
