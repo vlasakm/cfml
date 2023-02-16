@@ -46,21 +46,19 @@ struct ArenaChunk {
 	//u8 mem[];
 };
 
+static ArenaChunk sentinel = {0};
+
 typedef struct {
 	ArenaChunk *current;
 	size_t prev_size_sum;
-	ArenaChunk dummy;
 } Arena;
 
 void
 arena_init(Arena *arena)
 {
-	ArenaChunk *chunk = &arena->dummy;
+	ArenaChunk *chunk = &sentinel;
 	arena->current = chunk;
 	arena->prev_size_sum = 0;
-	chunk->size = 0;
-	chunk->pos = 0;
-	chunk->prev = NULL;
 }
 
 void *
@@ -105,8 +103,10 @@ void
 arena_destroy(Arena *arena)
 {
 	arena_restore(arena, 0);
-	free(arena->current);
-	arena->current = &arena->dummy;
+	if (arena->current != &sentinel) {
+		free(arena->current);
+		arena->current = &sentinel;
+	}
 }
 
 
