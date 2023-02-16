@@ -124,9 +124,8 @@ arena_vaprintf(Arena *arena, const char *fmt, va_list ap)
 	if ((size_t) len <= available) {
 		arena->current->pos += (size_t) len;
 	} else {
-		va_copy(ap, ap_orig);
 		mem = arena_alloc(arena, (size_t) len);
-		vsnprintf(mem, (size_t) len, fmt, ap);
+		vsnprintf(mem, (size_t) len, fmt, ap_orig);
 	}
 	va_end(ap_orig);
 	return mem;
