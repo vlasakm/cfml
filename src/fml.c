@@ -1310,6 +1310,10 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 	vm->bp = vm->frame_stack_pos;
 	vm->frame_stack_pos += local_cnt;
 
+	if (vm->frame_stack_pos > vm->frame_stack_len) {
+		exec_error(vm->ec, "Frame stack space exhausted, too much recursion?");
+	}
+
 	Value *arguments = vm_peek_n(vm, argument_cnt);
 	vm_pop_n(vm, argument_cnt);
 	Value *locals = &vm->frame_stack[vm->bp];
