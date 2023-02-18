@@ -4,5 +4,5 @@ test:
   script:
     - meson setup build
     - meson compile -C build
-    - cppcheck --error-exitcode=1 **.c
+    - cppcheck --error-exitcode=1 src/*.c
     - env FML="$(readlink -f ./build/fml)" /FMLtest/suite all
