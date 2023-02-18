@@ -151,6 +151,8 @@ typedef enum {
 typedef enum {
 	GK_ARRAY,
 	GK_OBJECT,
+
+	GK_PRINTING,
 } GcValueKind;
 
 typedef struct GcValue GcValue;
@@ -371,6 +373,7 @@ value_print(Value value)
 		case GK_ARRAY: {
 			printf("[");
 			Array *array = value_as_array(value);
+			array->gcvalue.kind = GK_PRINTING;
 			for (size_t i = 0; i < array->length; i++) {
 				if (i != 0) {
 					printf(", ");
@@ -378,11 +381,14 @@ value_print(Value value)
 				value_print(array->values[i]);
 			}
 			printf("]");
+			array->gcvalue.kind = GK_ARRAY;
 			break;
 		}
 		case GK_OBJECT:
 			printf("object(");
 			Object *object = value_as_object(value);
+			object->gcvalue.kind = GK_PRINTING;
+
 			Value parent = object->parent;
 			bool prev = false;
 			if (!value_is_null(parent)) {
@@ -411,6 +417,10 @@ value_print(Value value)
 			}
 			printf(")");
 			free(fields);
+			object->gcvalue.kind = GK_OBJECT;
+			break;
+		case GK_PRINTING:
+			printf("...");
 			break;
 		}
 		break;
@@ -622,6 +632,8 @@ value_call_primitive_method(ErrorContext *ec, Value target, Str method, Value *a
 			}
 		case GK_OBJECT:
 			break;
+		case GK_PRINTING:
+			UNREACHABLE();
 		}
 	case VK_FUNCTION:
 		break;
