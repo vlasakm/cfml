@@ -1,0 +1,8 @@
+image: $CI_REGISTRY/vlasami6/fmltest:master
+
+test:
+  script:
+    - meson setup build
+    - meson compile -C build
+    - cppcheck --error-exitcode=1 **.c
+    - env FML="$(readlink -f ./build/fml)" /FMLtest/suite all
