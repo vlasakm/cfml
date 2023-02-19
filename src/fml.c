@@ -2635,7 +2635,7 @@ argument_error(ErrorContext *ec, const char *msg, ...)
 }
 
 
-Str
+static Str
 read_file(ErrorContext *ec, Arena *arena, const char *name)
 {
 	errno = 0;
@@ -2661,38 +2661,261 @@ read_file(ErrorContext *ec, Arena *arena, const char *name)
 	return (Str) { .str = buf, .len = fsize };
 }
 
-void
-print_help(FILE *f)
+static const char cmd_parse_help[] = \
+	"USAGE:\n"
+	"    fml parse [OPTIONS] FILE\n"
+	"\n"
+	"ARGS:\n"
+	"    FILE    The file to parse\n"
+	"\n"
+	"OPTIONS:\n"
+	"    --top   Parse whole program, not just single expression\n"
+	"\n"
+;
+
+static void
+cmd_parse(ErrorContext *ec, Arena *arena, int argc, const char **argv)
 {
-	fprintf(f,
-		"Usage:\n"
-		"    fml -h                 Print this message.\n"
-		"    fml --help             Print this message.\n"
-		"    fml help               Print this message.\n"
-		"    fml parse FILE         Parse a single expression from fml source FILE.\n"
-		"    fml parse_top FILE     Parse a full program from fml source FILE.\n"
-		"    fml run_ast FILE       Parse fml source FILE and interpret the AST.\n"
-		"    fml run FILE           Parse from fml source FILE, compile it to bytecode and execute it.\n"
-		"    fml execute FILE       Parse bytecode from FILE and execut it.\n"
-		"    fml compile FILE       Parse fml source FILE and compile it to bytecode\n"
-		"    fml disassemble FILE   Parse bytecode from FILE and print bytecode disassembly.\n"
-		"    fml dump FILE          Parse fml source FILE, compile it and bytecode disassembly.\n"
-	);
+	enum { PARSE_EXPRESSION, PARSE_TOP } kind = PARSE_EXPRESSION;
+	while (argc > 0 && argv[0][0] == '-') {
+		if (strcmp(argv[0], "--top") == 0) {
+			kind = PARSE_TOP;
+		} else {
+			argument_error(ec, "Unknown flag '%s'", argv[0]);
+		}
+		argc--, argv++;
+	}
+	if (argc != 1) {
+		argument_error(ec, "Expected FILE as a single positional argument\n");
+	}
+	Str source = read_file(ec, arena, argv[0]);
+	Ast *ast = parse_source(ec, arena, source);
+	OutputState os = { .f = stdout };
+	if (kind == PARSE_EXPRESSION && ast->kind == AST_TOP) {
+		ast = ((AstTop *)ast)->expressions[0];
+	}
+	write_ast(&os, ast, 4, true);
+}
+
+static const char cmd_run_help[] = \
+	"USAGE:\n"
+	"    fml run [OPTIONS] FILE\n"
+	"\n"
+	"ARGS:\n"
+	"    FILE    The file to run\n"
+	"\n"
+	"OPTIONS:\n"
+	"    --heap-log LOG_FILE   Heap log file, if none no logging is done\n"
+	"    --heap-size MBs       Maximum heap size in mebibytes\n"
+	"\n"
+;
+
+static void
+cmd_run(ErrorContext *ec, Arena *arena, int argc, const char **argv)
+{
+	while (argc > 0 && argv[0][0] == '-') {
+		if (strcmp(argv[0], "--heap-log") == 0) {
+			argc--, argv++;
+			ec->heap_log_file = fopen(argv[0], "wb");
+			if (!ec->heap_log_file) {
+				argument_error(ec, "Failed to open heap log '%s': %s", argv[0], strerror(errno));
+			}
+		} else if (strcmp(argv[0], "--heap-size") == 0) {
+			argc--, argv++;
+			char *end;
+			errno = 0;
+			long long heap_size = strtoll(argv[0], &end, 10);
+			if (errno != 0 || end == argv[0] || heap_size < 0 || heap_size > SIZE_MAX) {
+				argument_error(ec, "Invalid heap size '%s'", argv[0]);
+			}
+			ec->heap_size = heap_size;
+		} else {
+			argument_error(ec, "Unknown flag '%s'", argv[0]);
+		}
+		argc--, argv++;
+	}
+	if (argc != 1) {
+		argument_error(ec, "Expected FILE as a single argument\n");
+	}
+	Str source = read_file(ec, arena, argv[0]);
+        Ast *ast = parse_source(ec, arena, source);
+        Program program;
+        compile_ast(ec, arena, &program, ast);
+        vm_run(ec, arena, &program);
+}
+
+static const char cmd_ast_interpret_help[] = \
+	"USAGE:\n"
+	"    fml ast_interpret FILE\n"
+	"\n"
+	"ARGS:\n"
+	"    FILE    The source file to interpret with AST interpreter\n"
+;
+
+static void
+cmd_ast_interpret(ErrorContext *ec, Arena *arena, int argc, const char **argv)
+{
+	if (argc != 1) {
+		argument_error(ec, "Expected FILE as a single argument\n");
+	}
+	Str source = read_file(ec, arena, argv[0]);
+	Ast *ast = parse_source(ec, arena, source);
+	interpret_ast(ec, ast);
+}
+
+static const char cmd_bc_compile_help[] = \
+	"USAGE:\n"
+	"    fml bc_compile FILE\n"
+	"\n"
+	"ARGS:\n"
+	"    FILE    The source file to compile to bytecode\n"
+;
+
+static void
+cmd_bc_compile(ErrorContext *ec, Arena *arena, int argc, const char **argv)
+{
+	if (argc != 1) {
+		argument_error(ec, "Expected FILE as a single argument\n");
+	}
+	Str source = read_file(ec, arena, argv[0]);
+	Ast *ast = parse_source(ec, arena, source);
+	Program program;
+	compile_ast(ec, arena, &program, ast);
+	write_program(&program, stdout);
+	fflush(stdout);
+}
+
+static const char cmd_bc_interpret_help[] = \
+	"USAGE:\n"
+	"    fml bc_interpret FILE\n"
+	"\n"
+	"ARGS:\n"
+	"    FILE    The bytecode file to interpret\n"
+;
+
+static void
+cmd_bc_interpret(ErrorContext *ec, Arena *arena, int argc, const char **argv)
+{
+	if (argc != 1) {
+		argument_error(ec, "Expected FILE as a single argument\n");
+	}
+	Str source = read_file(ec, arena, argv[0]);
+	Program program;
+	read_program(ec, arena, &program, (u8 *) source.str, source.len);
+	vm_run(ec, arena, &program);
+}
+
+static const char cmd_bc_disassemble_help[] = \
+	"USAGE:\n"
+	"    fml bc_disassemble FILE\n"
+	"\n"
+	"ARGS:\n"
+	"    FILE    The bytecode file to disassemble\n"
+;
+
+static void
+cmd_bc_disassemble(ErrorContext *ec, Arena *arena, int argc, const char **argv)
+{
+	if (argc != 1) {
+		argument_error(ec, "Expected FILE as a single argument\n");
+	}
+	Str source = read_file(ec, arena, argv[0]);
+	Program program;
+	read_program(ec, arena, &program, (u8 *) source.str, source.len);
+	disassemble(&program, stdout);
+}
+
+static const char cmd_bc_dump_help[] = \
+	"USAGE:\n"
+	"    fml bc_dump FILE\n"
+	"\n"
+	"ARGS:\n"
+	"    FILE    The source file to compile and disassemble\n"
+;
+
+static void
+cmd_bc_dump(ErrorContext *ec, Arena *arena, int argc, const char **argv)
+{
+	if (argc != 1) {
+		argument_error(ec, "Expected FILE as a single argument\n");
+	}
+	Str source = read_file(ec, arena, argv[0]);
+	Ast *ast = parse_source(ec, arena, source);
+	Program program;
+	compile_ast(ec, arena, &program, ast);
+	disassemble(&program, stdout);
+}
+
+static const char cmd_help_help[] = \
+	"USAGE:\n"
+	"    fml help [COMMAND]\n"
+	"\n"
+	"ARGS:\n"
+	"    COMMAND    Get help about COMMAND, otherwise get help about fml\n"
+;
+
+void print_help(FILE *file, const char *command);
+
+static void
+cmd_help(ErrorContext *ec, Arena *arena, int argc, const char **argv)
+{
+	(void) arena;
+	if (argc == 0) {
+		print_help(stdout, NULL);
+	} else if (argc != 1) {
+		argument_error(ec, "Expected COMMAND as an argument\n");
+	}
+	print_help(stdout, argv[0]);
+
+}
+
+static struct {
+    const char *name;
+    void (*func)(ErrorContext *ec, Arena *arena, int argc, const char **argv);
+    const char *short_help;
+    const char *help;
+} commands[] = {
+    #define CMD(name, short_help) { #name, cmd_##name, short_help, cmd_##name ##_help },
+    #define CMD_ALIAS(alias, target) { #alias, cmd_##target, NULL, NULL },
+    CMD(run, "Run a program with the bytecode interpreter")
+    CMD(bc_compile, "Compile a program to bytecode")
+    CMD(bc_interpret, "Interpret bytecode")
+    CMD(bc_disassemble, "Disassemble bytecode")
+    CMD(bc_dump, "Compile program and print disassembly")
+    CMD(ast_interpret, "Run a program with AST interpreter")
+    CMD(parse, "Parse a source file and print it as AST")
+    CMD(help, "Get help about fml or subcommand")
+    #undef CMD
+};
+
+void
+print_help(FILE *file, const char *command)
+{
+	if (command) {
+		for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
+			if (strcmp(command, commands[i].name) != 0) {
+				continue;
+			}
+			fputs(commands[i].help, file);
+			return;
+		}
+		file = stderr;
+		fprintf(file, "Unknown command '%s'", command);
+		// fallthrough
+	}
+	fprintf(file, "USAGE:\n");
+	fprintf(file, "    fml SUBCOMMAND [OPTIONS] [ARGS]\n");
+	fprintf(file, "\n");
+	fprintf(file, "SUBCOMMANDS:\n");
+	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
+		fprintf(file, "    %-18s%s\n", commands[i].name, commands[i].short_help);
+	}
+	return;
 }
 
 int
 main(int argc, const char **argv) {
-	if (argc == 2 && (strcmp(argv[1], "-h") == 0
-			|| strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "help") == 0)) {
-		print_help(stdout);
-		return EXIT_SUCCESS;
-	}
-
-	if (argc < 3) {
-		fprintf(stderr, "Expected a command and file as arguments\n");
-		print_help(stderr);
-		return EXIT_FAILURE;
-	}
+	//return 0;
 
 	Arena arena_;
 	Arena *arena = &arena_;
@@ -2704,47 +2927,33 @@ main(int argc, const char **argv) {
 	if (setjmp(ec.loc) != 0) {
 		goto end;
 	}
-	Str source = read_file(&ec, arena, argv[2]);
 
-	if (strcmp(argv[1], "parse") == 0) {
-		Ast *ast = parse_source(&ec, arena, source);
-		if (ast->kind == AST_TOP) {
-			ast = ((AstTop *)ast)->expressions[0];
-		}
-		OutputState os = { .f = stdout };
-		write_ast(&os, ast, 4, true);
-	} else if (strcmp(argv[1], "parse_top") == 0) {
-		Ast *ast = parse_source(&ec, arena, source);
-		OutputState os = { .f = stdout };
-		write_ast(&os, ast, 4, true);
-	} else if (strcmp(argv[1], "run_ast") == 0) {
-		Ast *ast = parse_source(&ec, arena, source);
-		interpret_ast(&ec, ast);
-	} else if (strcmp(argv[1], "run") == 0) {
-		Ast *ast = parse_source(&ec, arena, source);
-		Program program;
-		compile_ast(&ec, arena, &program, ast);
-		vm_run(&ec, arena, &program);
-	} else if (strcmp(argv[1], "execute") == 0) {
-		Program program;
-		read_program(&ec, arena, &program, (u8 *) source.str, source.len);
-		vm_run(&ec, arena, &program);
-	} else if (strcmp(argv[1], "compile") == 0) {
-		Ast *ast = parse_source(&ec, arena, source);
-		Program program;
-		compile_ast(&ec, arena, &program, ast);
-		write_program(&program, stdout);
-		fflush(stdout);
-	} else if (strcmp(argv[1], "disassemble") == 0) {
-		Program program;
-		read_program(&ec, arena, &program, (u8 *) source.str, source.len);
-		disassemble(&program, stdout);
-	} else if (strcmp(argv[1], "dump") == 0) {
-		Ast *ast = parse_source(&ec, arena, source);
-		Program program;
-		compile_ast(&ec, arena, &program, ast);
-		disassemble(&program, stdout);
+	if (argc < 2) {
+		fprintf(stderr, "Expected a command as first argument\n");
+		print_help(stderr, NULL);
+		return EXIT_FAILURE;
 	}
+
+	const char *command = argv[1];
+	argc -= 2;
+	argv += 2;
+	size_t command_cnt = sizeof(commands) / sizeof(commands[0]);
+	for (size_t i = 0; i < command_cnt; i++) {
+		if (strcmp(command, commands[i].name) != 0) {
+			continue;
+		}
+		if (argc >= 1 && (strcmp(argv[0], "-h") == 0 || strcmp(argv[0], "--help") == 0)) {
+			print_help(stdout, command);
+			//printf("USAGE:\n\tfml %s\t%s\n", command, commands[i].help);
+			//printf("%s", commands[i].help);
+			goto end;
+		}
+		commands[i].func(&ec, arena, argc, argv);
+		goto end;
+	}
+
+	fprintf(stderr, "Unknown command '%s'\n", command);
+	print_help(stderr, NULL);
 
 end:
 	for (Error *err = ec.error_head; err; err = err->next) {
