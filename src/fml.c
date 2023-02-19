@@ -49,6 +49,8 @@ str_hash(Str id)
     return h;
 }
 
+typedef struct Heap Heap;
+
 typedef struct Error Error;
 struct Error {
 	Error *next;
@@ -63,6 +65,9 @@ typedef struct {
 	Error *error_head;
 	Error *error_tail;
 	jmp_buf loc;
+
+	// For freeing the heap on error
+	Heap *heap;
 } ErrorContext;
 
 void
@@ -72,6 +77,7 @@ error_context_init(ErrorContext *ec)
 	ec->source = (Str) {0};
 	ec->error_head = NULL;
 	ec->error_tail = NULL;
+	ec->heap = NULL;
 }
 
 u8 *
@@ -208,30 +214,82 @@ exec_error(ErrorContext *ec, const char *msg, ...)
 	va_end(ap);
 }
 
-Value
-make_null(void)
+struct Heap {
+	ErrorContext *ec;
+	FILE *log;
+	//u8 *mem;
+	size_t pos;
+	size_t size;
+};
+
+static void
+heap_init(Heap *heap, ErrorContext *ec, size_t size, FILE *log)
 {
+	if (size == 0) {
+		// 100 MiB
+		size = 100 * 1024 * 1024;
+	}
+	*heap = (Heap) {
+		.ec = ec,
+		.log = log,
+		.pos = 0,
+		.size = size,
+	};
+	ec->heap = heap;
+}
+
+void
+heap_destroy(Heap *heap)
+{
+	if (heap->log && fclose(heap->log) != 0) {
+		exec_error(heap->ec, "Failed to write to heap log: %s", strerror(errno));
+	}
+}
+
+static size_t
+align(size_t pos, size_t alignment)
+{
+	return (pos + (alignment - 1)) & ~(alignment - 1);
+}
+
+static void *
+heap_alloc(Heap *heap, size_t size)
+{
+	size_t pos = align(heap->pos, 8);
+	if (pos + size > heap->size) {
+		exec_error(heap->ec, "Heap space exhausted");
+	}
+	heap->pos = pos + size;
+	return malloc(size);
+}
+
+Value
+make_null(Heap *heap)
+{
+	(void) heap;
 	return (Value) { .kind = VK_NULL };
 }
 
 Value
-make_boolean(bool value)
+make_boolean(Heap *heap, bool value)
 {
+	(void) heap;
 	return (Value) { .kind = VK_BOOLEAN, .boolean = value };
 }
 
 Value
-make_integer(i32 value)
+make_integer(Heap *heap, i32 value)
 {
+	(void) heap;
 	return (Value) { .kind = VK_INTEGER, .integer = value };
 }
 
 GcValue *last;
 
 Value
-make_array(size_t length)
+make_array(Heap *heap, size_t length)
 {
-	Array *array = malloc(sizeof(*array) + length * sizeof(array->values[0]));
+	Array *array = heap_alloc(heap, sizeof(*array) + length * sizeof(array->values[0]));
 	array->gcvalue = (GcValue) { .kind = GK_ARRAY };
 	array->length = length;
 
@@ -242,9 +300,9 @@ make_array(size_t length)
 }
 
 Value
-make_object(size_t field_cnt)
+make_object(Heap *heap, size_t field_cnt)
 {
-	Object *object = malloc(sizeof(*object) + field_cnt * sizeof(object->fields[0]));
+	Object *object = heap_alloc(heap, sizeof(*object) + field_cnt * sizeof(object->fields[0]));
 	object->gcvalue = (GcValue) { .kind = GK_OBJECT };
 	// NOTE: Caller has to set parent!
 	//object->parent = make_null();
@@ -257,14 +315,16 @@ make_object(size_t field_cnt)
 }
 
 Value
-make_function_ast(AstFunction *function)
+make_function_ast(Heap *heap, AstFunction *function)
 {
+	(void) heap;
 	return (Value) { .kind = VK_FUNCTION, .function = function };
 }
 
 Value
-make_function_bc(u16 function_index)
+make_function_bc(Heap *heap, u16 function_index)
 {
+	(void) heap;
 	return (Value) { .kind = VK_FUNCTION, .function_index = function_index };
 }
 
@@ -547,7 +607,7 @@ value_method_try(ErrorContext *ec, Value value, Value *receiver, Str name)
 }
 
 Value
-value_call_primitive_method(ErrorContext *ec, Value target, Str method, Value *arguments, size_t argument_cnt)
+value_call_primitive_method(ErrorContext *ec, Heap *heap, Value target, Str method, Value *arguments, size_t argument_cnt)
 {
 	const u8 *method_name = method.str;
 	size_t method_name_len = method.len;
@@ -556,21 +616,21 @@ value_call_primitive_method(ErrorContext *ec, Value target, Str method, Value *a
 
 	METHOD("==") {
 		if (argument_cnt != 1) goto err;
-		if (target.kind != arguments[0].kind) return make_boolean(false);
+		if (target.kind != arguments[0].kind) return make_boolean(heap, false);
 		switch (target.kind) {
-		case VK_NULL: return make_boolean(true);
-		case VK_BOOLEAN: return make_boolean(value_as_bool(target) == value_as_bool(arguments[0]));
-		case VK_INTEGER: return make_boolean(value_as_integer(target) == value_as_integer(arguments[0]));
+		case VK_NULL: return make_boolean(heap, true);
+		case VK_BOOLEAN: return make_boolean(heap, value_as_bool(target) == value_as_bool(arguments[0]));
+		case VK_INTEGER: return make_boolean(heap, value_as_integer(target) == value_as_integer(arguments[0]));
 		default: goto err;
 		}
 	}
 	METHOD("!=") {
 		if (argument_cnt != 1) goto err;
-		if (target.kind != arguments[0].kind) return make_boolean(true);
+		if (target.kind != arguments[0].kind) return make_boolean(heap, true);
 		switch (target.kind) {
-		case VK_NULL: return make_boolean(false);
-		case VK_BOOLEAN: return make_boolean(value_as_bool(target) != value_as_bool(arguments[0]));
-		case VK_INTEGER: return make_boolean(value_as_integer(target) != value_as_integer(arguments[0]));
+		case VK_NULL: return make_boolean(heap, false);
+		case VK_BOOLEAN: return make_boolean(heap, value_as_bool(target) != value_as_bool(arguments[0]));
+		case VK_INTEGER: return make_boolean(heap, value_as_integer(target) != value_as_integer(arguments[0]));
 		default: goto err;
 		}
 	}
@@ -583,8 +643,8 @@ value_call_primitive_method(ErrorContext *ec, Value target, Str method, Value *a
 		if (arguments[0].kind != VK_BOOLEAN) goto err;
 		bool left = value_as_bool(target);
 		bool right = value_as_bool(arguments[0]);
-		METHOD("&") return make_boolean(left && right);
-		METHOD("|") return make_boolean(left || right);
+		METHOD("&") return make_boolean(heap, left && right);
+		METHOD("|") return make_boolean(heap, left || right);
 		break;
 	}
 	case VK_INTEGER: {
@@ -592,29 +652,29 @@ value_call_primitive_method(ErrorContext *ec, Value target, Str method, Value *a
 		if (arguments[0].kind != VK_INTEGER) goto err;
 		i32 left = value_as_integer(target);
 		i32 right = value_as_integer(arguments[0]);
-		METHOD("+") return make_integer(left + right);
-		METHOD("-") return make_integer(left - right);
-		METHOD("*") return make_integer(left * right);
+		METHOD("+") return make_integer(heap, left + right);
+		METHOD("-") return make_integer(heap, left - right);
+		METHOD("*") return make_integer(heap, left * right);
 		METHOD("/") {
 				if (right == 0) {
 					exec_error(ec, "Division by zero");
-					return make_integer(0);
+					return make_integer(heap, 0);
 				} else {
-					return make_integer(left / right);
+					return make_integer(heap, left / right);
 				}
 		}
 		METHOD("%") {
 				if (right == 0) {
 					exec_error(ec, "Modulo by zero");
-					return make_integer(0);
+					return make_integer(heap, 0);
 				} else {
-					return make_integer(left % right);
+					return make_integer(heap, left % right);
 				}
 		}
-		METHOD("<=") return make_boolean(left <= right);
-		METHOD("<") return make_boolean(left < right);
-		METHOD(">=") return make_boolean(left >= right);
-		METHOD(">") return make_boolean(left > right);
+		METHOD("<=") return make_boolean(heap, left <= right);
+		METHOD("<") return make_boolean(heap, left < right);
+		METHOD(">=") return make_boolean(heap, left >= right);
+		METHOD(">") return make_boolean(heap, left > right);
 		break;
 	}
 	case VK_GCVALUE:
@@ -640,7 +700,7 @@ value_call_primitive_method(ErrorContext *ec, Value target, Str method, Value *a
 	}
 err:
 	exec_error(ec, "Invalid method '%.*s' called on value (invalid types or number of arguments)", method_name_len, method_name);
-	return make_null();
+	return make_null(heap);
 }
 
 // A simple hash table.
@@ -752,6 +812,7 @@ typedef struct {
 	ErrorContext *ec;
 	Environment *env;
 	Environment *global_env;
+	Heap heap;
 } InterpreterState;
 
 Environment *
@@ -796,7 +857,7 @@ env_lookup(InterpreterState *is, Str name)
 	if (!lvalue) {
 		// Name not found, should be a global whose
 		// definition we will yet see.
-		Value null = make_null();
+		Value null = make_null(&is->heap);
 		// TODO: could be improved by having env_define return an lvalue
 		env_define(is->global_env, name, null);
 		return env_lookup_raw(is->global_env, name);
@@ -811,21 +872,21 @@ interpret(InterpreterState *is, Ast *ast)
 {
 	switch (ast->kind) {
 	case AST_NULL: {
-		return make_null();
+		return make_null(&is->heap);
 	}
 	case AST_BOOLEAN: {
 		AstBoolean *boolean = (AstBoolean *) ast;
-		return make_boolean(boolean->value);
+		return make_boolean(&is->heap, boolean->value);
 	}
 	case AST_INTEGER: {
 		AstInteger *integer = (AstInteger *) ast;
-		return make_integer(integer->value);
+		return make_integer(&is->heap, integer->value);
 	}
 	case AST_ARRAY: {
 		AstArray *array = (AstArray *) ast;
 		Value size_value = interpret(is, array->size);
 		size_t size = value_as_size(is->ec, size_value);
-		Value array_value = make_array(size);
+		Value array_value = make_array(&is->heap, size);
 		Array *array_obj = value_as_array(array_value);
 		Environment *saved_env = is->env;
 		for (size_t i = 0; i < size; i++) {
@@ -839,7 +900,7 @@ interpret(InterpreterState *is, Ast *ast)
 	case AST_OBJECT: {
 		AstObject *object = (AstObject *) ast;
 		Value parent = interpret(is, object->extends);
-		Value object_value = make_object(object->member_cnt);
+		Value object_value = make_object(&is->heap, object->member_cnt);
 		Object *object_obj = value_as_object(object_value);
 		object_obj->parent = parent;
 		for (size_t i = 0; i < object->member_cnt; i++) {
@@ -859,7 +920,7 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 	case AST_FUNCTION: {
 		AstFunction *function = (AstFunction *) ast;
-		return make_function_ast(function);
+		return make_function_ast(&is->heap, function);
 	}
 
 	case AST_DEFINITION: {
@@ -932,7 +993,7 @@ interpret(InterpreterState *is, Ast *ast)
 		while (value_to_bool(interpret(is, loop->condition))) {
 			interpret(is, loop->body);
 		}
-		return make_null();
+		return make_null(&is->heap);
 	}
 	case AST_PRINT: {
 		AstPrint *print = (AstPrint *) ast;
@@ -942,7 +1003,7 @@ interpret(InterpreterState *is, Ast *ast)
 		}
 		builtin_print(is->ec, print->format, arguments, print->argument_cnt);
 		free(arguments);
-		return make_null();
+		return make_null(&is->heap);
 	}
 	case AST_BLOCK: {
 		AstBlock *block = (AstBlock *) ast;
@@ -1007,23 +1068,26 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 		env_destroy(is->env);
 		is->env = saved_env;
 	} else {
-		return_value = value_call_primitive_method(is->ec, object, method, &arguments[0], argument_cnt);
+		return_value = value_call_primitive_method(is->ec, &is->heap, object, method, &arguments[0], argument_cnt);
 	}
 	free(arguments);
 	return return_value;
 }
 
 void
-interpret_ast(ErrorContext *ec, Ast *ast)
+interpret_ast(ErrorContext *ec, Arena *arena, Ast *ast, size_t heap_size, FILE *heap_log)
 {
 	Environment *env = env_create(NULL);
-	InterpreterState is = {
+	InterpreterState *is = arena_alloc(arena, sizeof(*is));
+	*is = (InterpreterState) {
 		.ec = ec,
 		.env = env,
 		.global_env = env,
+		.heap = {0},
 	};
-	env_define(is.env, STR("this"), make_null());
-	interpret(&is, ast);
+	heap_init(&is->heap, ec, heap_size, heap_log);
+	env_define(is->env, STR("this"), make_null(&is->heap));
+	interpret(is, ast);
 	env_destroy(env);
 }
 
@@ -1218,6 +1282,7 @@ read_program(ErrorContext *ec, Arena *arena, Program *program, u8 *input, size_t
 typedef struct {
 	ErrorContext *ec;
 	Arena *arena;
+	Heap heap;
 	Program *program;
 	Value global;
 	Value *stack;
@@ -1234,7 +1299,7 @@ static Value
 make_null_vm(VM *vm)
 {
 	(void) vm;
-	return make_null();
+	return make_null(&vm->heap);
 }
 
 static Value
@@ -1290,7 +1355,7 @@ constant_string(VM *vm, u8 **ip)
 static Value
 vm_instantiate_class(VM *vm, Class *class, Value (*make_value)(VM *vm))
 {
-	Value object_value = make_object(class->member_cnt);
+	Value object_value = make_object(&vm->heap, class->member_cnt);
 	Object *object = value_as_object(object_value);
 	Constant *constants = vm->program->constants;
 
@@ -1333,7 +1398,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		locals[i] = arguments[i];
 	}
 	for (size_t i = argument_cnt; i < local_cnt; i++) {
-		locals[i] = make_null();
+		locals[i] = make_null(&vm->heap);
 	}
 
 	for (u8 *ip = method->instruction_start;;) {
@@ -1344,16 +1409,16 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Value value;
 			switch (constant->kind) {
 			case CK_NULL:
-				value = make_null();
+				value = make_null(&vm->heap);
 				break;
 			case CK_BOOLEAN:
-				value = make_boolean(constant->boolean);
+				value = make_boolean(&vm->heap, constant->boolean);
 				break;
 			case CK_INTEGER:
-				value = make_integer(constant->integer);
+				value = make_integer(&vm->heap, constant->integer);
 				break;
 			case CK_FUNCTION:
-				value = make_function_bc(constant_index);
+				value = make_function_bc(&vm->heap, constant_index);
 				break;
 			default:
 				assert(false);
@@ -1365,7 +1430,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Value initializer = vm_pop(vm);
 			Value size_value = vm_pop(vm);
 			size_t size = value_as_size(vm->ec, size_value);
-			Value array_value = make_array(size);
+			Value array_value = make_array(&vm->heap, size);
 			Array *array = value_as_array(array_value);
 			for (size_t i = 0; i < size; i++) {
 				array->values[i] = initializer;
@@ -1440,7 +1505,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			}
 			u16 method_index = value_as_function_bc(*function);
 			// Receiver (this) is null for functions
-			*function = make_null();
+			*function = make_null(&vm->heap);
 			vm_call_method(vm, method_index, argument_cnt + 1);
 			break;
 		}
@@ -1454,7 +1519,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 				vm_call_method(vm, method_index, argument_cnt);
 			} else {
 				Value *arguments = vm_peek_n(vm, argument_cnt - 1);
-				Value return_value = value_call_primitive_method(vm->ec, *lobject, name, arguments, argument_cnt - 1);
+				Value return_value = value_call_primitive_method(vm->ec, &vm->heap, *lobject, name, arguments, argument_cnt - 1);
 				vm_pop_n(vm, argument_cnt);
 				vm_push(vm, return_value);
 			}
@@ -1466,7 +1531,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			Value *arguments = vm_peek_n(vm, argument_cnt);
 			builtin_print(vm->ec, format_string, arguments, argument_cnt);
 			vm_pop_n(vm, argument_cnt);
-			vm_push(vm, make_null());
+			vm_push(vm, make_null(&vm->heap));
 			break;
 		}
 		case OP_DROP: {
@@ -1483,13 +1548,15 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 }
 
 static void
-vm_run(ErrorContext *ec, Arena *arena, Program *program)
+vm_run(ErrorContext *ec, Arena *arena, Program *program, size_t heap_size, FILE *heap_log)
 {
-	VM vm = {
+	VM *vm = arena_alloc(arena, sizeof(*vm));
+	*vm = (VM) {
 		.ec = ec,
+		.heap = {0},
 		.arena = arena,
 		.program = program,
-		.global = make_null(),
+		.global = {0},
 		.stack = arena_alloc(arena, 1024 * sizeof(Value)),
 		.stack_pos = -1,
 		.stack_len = 1024,
@@ -1498,12 +1565,13 @@ vm_run(ErrorContext *ec, Arena *arena, Program *program)
 		.frame_stack_len = 1024,
 		.bp = 0,
 	};
-	vm.global = vm_instantiate_class(&vm, &program->global_class, make_null_vm);
+	heap_init(&vm->heap, ec, heap_size, heap_log);
+	vm->global = vm_instantiate_class(vm, &program->global_class, make_null_vm);
 	// push `this` as an argument
-	vm.stack[++vm.stack_pos] = make_null();
-	vm_call_method(&vm, program->entry_point, 1);
+	vm->stack[++vm->stack_pos] = make_null(&vm->heap);
+	vm_call_method(vm, program->entry_point, 1);
 	// Check that the program left exactly one value on the stack
-	assert(vm.stack_pos == 0);
+	assert(vm->stack_pos == 0);
 }
 
 typedef struct {
@@ -1806,9 +1874,9 @@ compile(CompilerState *cs, Ast *ast)
 
 		// Start with empty environment
 		cs->env = env_create(NULL);
-		env_define(cs->env, STR("this"), make_integer(cs->local_cnt++));
+		env_define(cs->env, STR("this"), make_integer(NULL, cs->local_cnt++));
 		for (size_t i = 0; i < function->parameter_cnt; i++) {
-			env_define(cs->env, function->parameters[i], make_integer(cs->local_cnt++));
+			env_define(cs->env, function->parameters[i], make_integer(NULL, cs->local_cnt++));
 		}
 		compile(cs, function->body);
 		op(cs, OP_RETURN);
@@ -1847,7 +1915,7 @@ compile(CompilerState *cs, Ast *ast)
 				compile_error(cs, "Nested definition (in definition) in object not allowed");
 			}
 		} else {
-			env_define(cs->env, definition->name, make_integer(cs->local_cnt));
+			env_define(cs->env, definition->name, make_integer(NULL, cs->local_cnt));
 			op_index(cs, OP_SET_LOCAL, cs->local_cnt);
 			cs->local_cnt += 1;
 		}
@@ -2026,7 +2094,7 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	garena_init(&cs.members);
 
 	size_t start = garena_save(&cs.instructions);
-	env_define(cs.env, STR("this"), make_integer(cs.local_cnt++));
+	env_define(cs.env, STR("this"), make_integer(NULL, cs.local_cnt++));
 	compile(&cs, ast);
 	op(&cs, OP_RETURN);
 
@@ -2713,22 +2781,24 @@ static const char cmd_run_help[] = \
 static void
 cmd_run(ErrorContext *ec, Arena *arena, int argc, const char **argv)
 {
+	size_t heap_size = 0;
+	FILE *heap_log = NULL;
 	while (argc > 0 && argv[0][0] == '-') {
 		if (strcmp(argv[0], "--heap-log") == 0) {
 			argc--, argv++;
-			ec->heap_log_file = fopen(argv[0], "wb");
-			if (!ec->heap_log_file) {
+			heap_log = fopen(argv[0], "wb");
+			if (!heap_log) {
 				argument_error(ec, "Failed to open heap log '%s': %s", argv[0], strerror(errno));
 			}
 		} else if (strcmp(argv[0], "--heap-size") == 0) {
 			argc--, argv++;
 			char *end;
 			errno = 0;
-			long long heap_size = strtoll(argv[0], &end, 10);
-			if (errno != 0 || end == argv[0] || heap_size < 0 || heap_size > SIZE_MAX) {
+			long long num = strtoll(argv[0], &end, 10);
+			if (errno != 0 || end == argv[0] || num < 0 || (unsigned long long) num > SIZE_MAX) {
 				argument_error(ec, "Invalid heap size '%s'", argv[0]);
 			}
-			ec->heap_size = heap_size;
+			heap_size = num;
 		} else {
 			argument_error(ec, "Unknown flag '%s'", argv[0]);
 		}
@@ -2741,7 +2811,7 @@ cmd_run(ErrorContext *ec, Arena *arena, int argc, const char **argv)
         Ast *ast = parse_source(ec, arena, source);
         Program program;
         compile_ast(ec, arena, &program, ast);
-        vm_run(ec, arena, &program);
+        vm_run(ec, arena, &program, heap_size, heap_log);
 }
 
 static const char cmd_ast_interpret_help[] = \
@@ -2760,7 +2830,7 @@ cmd_ast_interpret(ErrorContext *ec, Arena *arena, int argc, const char **argv)
 	}
 	Str source = read_file(ec, arena, argv[0]);
 	Ast *ast = parse_source(ec, arena, source);
-	interpret_ast(ec, ast);
+	interpret_ast(ec, arena, ast, 0, NULL);
 }
 
 static const char cmd_bc_compile_help[] = \
@@ -2802,7 +2872,7 @@ cmd_bc_interpret(ErrorContext *ec, Arena *arena, int argc, const char **argv)
 	Str source = read_file(ec, arena, argv[0]);
 	Program program;
 	read_program(ec, arena, &program, (u8 *) source.str, source.len);
-	vm_run(ec, arena, &program);
+	vm_run(ec, arena, &program, 0, NULL);
 }
 
 static const char cmd_bc_disassemble_help[] = \
@@ -2984,6 +3054,9 @@ end:
 		last = prev;
 	}
 	arena_destroy(&ec.arena);
+	if (ec.heap) {
+		heap_destroy(ec.heap);
+	}
 	arena_destroy(arena);
 	return ec.error_head ? EXIT_FAILURE : EXIT_SUCCESS;
 }
