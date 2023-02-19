@@ -10,6 +10,7 @@
 #include <inttypes.h>
 #include <setjmp.h>
 #include <errno.h>
+#include <time.h>
 
 #include "parser.h"
 
@@ -223,18 +224,39 @@ struct Heap {
 };
 
 static void
+heap_log(Heap *heap, const char *event)
+{
+	if (!heap->log) {
+		return;
+	}
+	struct timespec ts;
+	if (timespec_get(&ts, TIME_UTC) != TIME_UTC) {
+		exec_error(heap->ec, "Failed to get time");
+	}
+	long long sec = ts.tv_sec;
+	long nsec = ts.tv_nsec;
+	fprintf(heap->log, "%lld%09ld,%s,%zu\n", sec, nsec, event, heap->pos);
+}
+
+
+static void
 heap_init(Heap *heap, ErrorContext *ec, size_t size, FILE *log)
 {
 	if (size == 0) {
 		// 100 MiB
-		size = 100 * 1024 * 1024;
+		size = 100;
 	}
+	size = size * 1024 * 1024;
 	*heap = (Heap) {
 		.ec = ec,
 		.log = log,
 		.pos = 0,
 		.size = size,
 	};
+	if (heap->log) {
+		fputs("timestamp,event,heap\n", heap->log);
+		heap_log(heap, "S");
+	}
 	ec->heap = heap;
 }
 
@@ -260,6 +282,7 @@ heap_alloc(Heap *heap, size_t size)
 		exec_error(heap->ec, "Heap space exhausted");
 	}
 	heap->pos = pos + size;
+	heap_log(heap, "A");
 	return malloc(size);
 }
 
