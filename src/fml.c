@@ -1601,7 +1601,6 @@ vm_run(ErrorContext *ec, Arena *arena, Program *program, size_t heap_size, FILE 
 		.heap = {0},
 		.arena = arena,
 		.program = program,
-		.global = {0},
 		.stack = arena_alloc(arena, 1024 * sizeof(Value)),
 		.stack_pos = -1,
 		.stack_len = 1024,
@@ -3067,8 +3066,6 @@ main(int argc, const char **argv) {
 	}
 
 	const char *command = argv[1];
-	argc -= 2;
-	argv += 2;
 	size_t command_cnt = sizeof(commands) / sizeof(commands[0]);
 	for (size_t i = 0; i < command_cnt; i++) {
 		if (strcmp(command, commands[i].name) != 0) {
@@ -3080,7 +3077,7 @@ main(int argc, const char **argv) {
 			//printf("%s", commands[i].help);
 			goto end;
 		}
-		commands[i].func(&ec, arena, argc, argv);
+		commands[i].func(&ec, arena, argc - 2, argv + 2);
 		goto end;
 	}
 
