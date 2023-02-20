@@ -455,10 +455,10 @@ value_print(Value value)
 		printf("%s", "null");
 		break;
 	case VK_BOOLEAN:
-		printf("%s", value.boolean ? "true" : "false");
+		printf("%s", value_as_bool(value) ? "true" : "false");
 		break;
 	case VK_INTEGER:
-		printf("%"PRIi32, value.integer);
+		printf("%"PRIi32, value_as_integer(value));
 		break;
 	case VK_GCVALUE:
 		switch (value.gcvalue->kind) {
@@ -563,7 +563,7 @@ builtin_print(ErrorContext *ec, Str format, Value *arguments, size_t argument_cn
 bool
 value_to_bool(Value value)
 {
-	if (value.kind == VK_NULL || (value.kind == VK_BOOLEAN && value.boolean == false)) {
+	if (value.kind == VK_NULL || (value.kind == VK_BOOLEAN && value_as_bool(value) == false)) {
 		return false;
 	}
 	return true;
@@ -1793,6 +1793,24 @@ jump_to(CompilerState *cs, OpCode op, size_t target)
 	jump_fixup(cs, pos, target);
 }
 
+static u16
+define_local(CompilerState *cs, Str name)
+{
+	env_define(cs->env, name, make_integer(NULL, cs->local_cnt));
+	return cs->local_cnt++;
+}
+
+static bool
+lookup_local(CompilerState *cs, Str name, u16 *index)
+{
+	Value *local_index = env_lookup_raw(cs->env, name);
+	if (local_index) {
+		*index = (u16) value_as_integer(*local_index);
+		return true;
+	}
+	return false;
+}
+
 static void
 compile(CompilerState *cs, Ast *ast)
 {
@@ -1919,9 +1937,9 @@ compile(CompilerState *cs, Ast *ast)
 
 		// Start with empty environment
 		cs->env = env_create(NULL);
-		env_define(cs->env, STR("this"), make_integer(NULL, cs->local_cnt++));
+		define_local(cs, STR("this"));
 		for (size_t i = 0; i < function->parameter_cnt; i++) {
-			env_define(cs->env, function->parameters[i], make_integer(NULL, cs->local_cnt++));
+			define_local(cs, function->parameters[i]);
 		}
 		compile(cs, function->body);
 		op(cs, OP_RETURN);
@@ -1960,18 +1978,17 @@ compile(CompilerState *cs, Ast *ast)
 				compile_error(cs, "Nested definition (in definition) in object not allowed");
 			}
 		} else {
-			env_define(cs->env, definition->name, make_integer(NULL, cs->local_cnt));
-			op_index(cs, OP_SET_LOCAL, cs->local_cnt);
-			cs->local_cnt += 1;
+			u16 local = define_local(cs, definition->name);
+			op_index(cs, OP_SET_LOCAL, local);
 		}
 		return;
 	}
 
 	case AST_VARIABLE_ACCESS: {
 		AstVariableAccess *variable_access = (AstVariableAccess *) ast;
-		Value *local_index = env_lookup_raw(cs->env, variable_access->name);
-		if (local_index) {
-			op_index(cs, OP_GET_LOCAL, value_as_integer(*local_index));
+		u16 local;
+		if (lookup_local(cs, variable_access->name, &local)) {
+			op_index(cs, OP_GET_LOCAL, local);
 		} else {
 			op_string(cs, OP_GET_GLOBAL, variable_access->name);
 		}
@@ -1980,9 +1997,9 @@ compile(CompilerState *cs, Ast *ast)
 	case AST_VARIABLE_ASSIGNMENT: {
 		AstVariableAssignment *variable_assignment = (AstVariableAssignment *) ast;
 		compile(cs, variable_assignment->value);
-		Value *local_index = env_lookup_raw(cs->env, variable_assignment->name);
-		if (local_index) {
-			op_index(cs, OP_SET_LOCAL, value_as_integer(*local_index));
+		u16 local;
+		if (lookup_local(cs, variable_assignment->name, &local)) {
+			op_index(cs, OP_SET_LOCAL, local);
 		} else {
 			op_string(cs, OP_SET_GLOBAL, variable_assignment->name);
 		}
@@ -2139,7 +2156,7 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	garena_init(&cs.members);
 
 	size_t start = garena_save(&cs.instructions);
-	env_define(cs.env, STR("this"), make_integer(NULL, cs.local_cnt++));
+	define_local(&cs, STR("this"));
 	compile(&cs, ast);
 	op(&cs, OP_RETURN);
 
