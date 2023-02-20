@@ -1,3 +1,6 @@
+// FML parser
+// Michal Vlasák, FIT CTU, 2023
+
 #pragma once
 
 #include <stddef.h>

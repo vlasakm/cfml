@@ -1,3 +1,6 @@
+// FML language interpreters/runtimes
+// Michal Vlasák, FIT CTU, 2023
+
 #include <stdio.h>
 #include <stddef.h>
 #include <stdlib.h>

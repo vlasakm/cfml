@@ -1,9 +1,10 @@
+// Arena allocation
+// Michal Vlasák, FIT CTU, 2023
+
 #pragma once
 
 #include <stddef.h>
 #include <stdalign.h>
-
-// Michal Vlasák, 2023
 
 // This header defines the API of two different Arena allocators - `Arena` and
 // `Garena`. In general arena allocators all "bump allocate" their memory. I.e.

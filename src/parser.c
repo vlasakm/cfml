@@ -1,3 +1,6 @@
+// FML parser
+// Michal Vlasák, FIT CTU, 2023
+
 #include <stdio.h>
 
 #include "parser.h"

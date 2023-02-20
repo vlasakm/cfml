@@ -1,3 +1,6 @@
+// Arena allocation
+// Michal Vlasák, FIT CTU, 2023
+
 #include "arena.h"
 #include "stdlib.h"
 #include "stdint.h"
