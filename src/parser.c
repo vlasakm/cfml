@@ -738,7 +738,7 @@ typedef struct {
 	Ast *(*nud)(Parser *);
 } NullInfo;
 
-NullInfo null_info[] = {
+static NullInfo null_info[] = {
 	#define TOK_NULL(tok, str, nud, led, lbp, rbp) { nud },
 	TOKENS(TOK_NULL, TOK_NULL, TOK_NULL)
 	#undef TOK_STR
@@ -764,7 +764,7 @@ typedef struct {
 	int rbp;
 } LeftInfo;
 
-LeftInfo left_info[] = {
+static LeftInfo left_info[] = {
 	#define TOK_LEFT(tok, str, nud, led, prec, assoc) { led, PREC_##prec, PREC_##prec + (ASSOC_##assoc == ASSOC_LEFT) },
 	TOKENS(TOK_LEFT, TOK_LEFT, TOK_LEFT)
 	#undef TOK_STR
