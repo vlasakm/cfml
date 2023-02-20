@@ -151,7 +151,7 @@ lex_create(Str source)
 
 #define DIGIT '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9'
 
-void
+static void
 lex_next(Lexer *lexer, Token *token)
 {
 	LexState state = LS_START;
@@ -186,61 +186,61 @@ lex_next(Lexer *lexer, Token *token)
 			case ']': tok = TK_RBRACKET; goto done;
 			case ',': tok = TK_COMMA; goto done;
 			default:  tok = TK_ERROR; goto done;
-		}; break;
+		} break;
 		case LS_IDENTIFIER: switch (c) {
 			case ALPHA: case DIGIT: break;
 			default: tok = TK_IDENTIFIER; goto prev_done;
-		}; break;
+		} break;
 		case LS_NUMBER: switch (c) {
 			case DIGIT: break;
 			default: tok = TK_NUMBER; goto prev_done;
-		}; break;
+		} break;
 		case LS_STRING: switch (c) {
 			case '"': tok = TK_STRING; end_offset = -1; goto done;
 			case '\\': state = LS_STRING_ESC; break;
-		}; break;
+		} break;
 		case LS_STRING_ESC: switch (c) {
 			case 'n': case 't': case 'r': case '~': case '"': case '\\': state = LS_STRING; break;
 			default: goto err;
-		}; break;
+		} break;
 		case LS_SLASH: switch (c) {
 			case '/': state = LS_LINE_COMMENT; start += 2; break;
 			case '*': state = LS_BLOCK_COMMENT; start += 2; break;
 			default: tok = TK_SLASH; goto prev_done;
-		}; break;
+		} break;
 		case LS_LINE_COMMENT: switch (c) {
 			case '\n': state = LS_START; start = lexer->pos + 1; break;
-		}; break;
+		} break;
 		case LS_BLOCK_COMMENT: switch (c) {
 			case '*': state = LS_BLOCK_COMMENT_STAR; break;
-		}; break;
+		} break;
 		case LS_BLOCK_COMMENT_STAR: switch (c) {
 			case '*': break;
 			case '/': state = LS_START; start = lexer->pos + 1; break;
 			default: state = LS_BLOCK_COMMENT; break;
-		}; break;
+		} break;
 		case LS_MINUS: switch (c) {
 			case '>': tok = TK_RARROW; goto done;
 			case DIGIT: state = LS_NUMBER; break;
 			default: tok = TK_MINUS; goto prev_done;
-		}; break;
+		} break;
 		case LS_EQUAL: switch (c) {
 			case '=': tok = TK_EQUAL_EQUAL; goto done;
 			default: tok = TK_EQUAL; goto prev_done;
-		}; break;
+		} break;
 		case LS_GREATER: switch (c) {
 			case '=': tok = TK_GREATER_EQUAL; goto done;
 			default: tok = TK_GREATER; goto prev_done;
-		}; break;
+		} break;
 		case LS_LESS: switch (c) {
 			case '=': tok = TK_LESS_EQUAL; goto done;
 			case '-': tok = TK_LARROW; goto done;
 			default: tok = TK_LESS; goto prev_done;
-		}; break;
+		} break;
 		case LS_EXCLAM: switch (c) {
 			case '=': tok = TK_BANG_EQUAL; goto done;
 			default: goto err;
-		}; break;
+		} break;
 		}
 
 		lexer->pos += 1;
@@ -435,7 +435,7 @@ primary(Parser *parser)
 		for (; pos < end; pos++) {
 			value = value * 10 + (*pos - '0');
 		}
-		integer->value = negative ? -value : value;
+		integer->value = (i32) (negative ? -value : value);
 		return &integer->base;
 	}
 	case TK_NULL: {

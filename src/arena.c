@@ -9,7 +9,7 @@ align(size_t pos, size_t alignment)
 	return (pos + (alignment - 1)) & ~(alignment - 1);
 }
 
-ArenaChunk sentinel = {0};
+static ArenaChunk sentinel = {0};
 
 void
 arena_init(Arena *arena)

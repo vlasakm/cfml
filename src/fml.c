@@ -316,7 +316,7 @@ make_integer(Heap *heap, i32 value)
 	return (Value) { .kind = VK_INTEGER, .integer = value };
 }
 
-GcValue *last;
+static GcValue *last;
 
 Value
 make_array(Heap *heap, size_t length)
@@ -722,11 +722,14 @@ value_call_primitive_method(ErrorContext *ec, Heap *heap, Value target, Str meth
 				Value *lvalue = array_index(ec, target, arguments[0]);
 				return *lvalue = arguments[1];
 			}
+			break;
 		case GK_OBJECT:
 			break;
 		case GK_PRINTING:
 			UNREACHABLE();
+			break;
 		}
+		break;
 	case VK_FUNCTION:
 		break;
 	}
@@ -1137,7 +1140,8 @@ static u32
 read_u32(u8 **src)
 {
 	u8 *pos = *src;
-	u32 res = (((u32) pos[3]) << 24) | (pos[2] << 16) | (pos[1] << 8) | (pos[0] << 0);
+	u32 res = (((u32) pos[3]) << 24) | (((u32) pos[2]) << 16)
+		| (((u32) pos[1]) <<  8) | (((u32) pos[0]) <<  0);
 	*src += 4;
 	return res;
 }
@@ -1146,7 +1150,7 @@ static uint16_t
 read_u16(u8 **src)
 {
 	u8 *pos = *src;
-	u16 res = ((uint16_t) (pos[1] << 8) | (pos[0] << 0));
+	u16 res = (((u32) pos[1]) <<  8) | (((u32) pos[0]) <<  0);
 	*src += 2;
 	return res;
 }
@@ -1523,12 +1527,12 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			break;
 		}
 		case OP_JUMP: {
-			i16 offset = read_u16(&ip);
+			i16 offset = (i16) read_u16(&ip);
 			ip += offset;
 			break;
 		}
 		case OP_BRANCH: {
-			i16 offset = read_u16(&ip);
+			i16 offset = (i16) read_u16(&ip);
 			Value condition = vm_pop(vm);
 			if (value_to_bool(condition)) {
 				ip += offset;
@@ -1602,7 +1606,7 @@ vm_run(ErrorContext *ec, Arena *arena, Program *program, size_t heap_size, FILE 
 		.arena = arena,
 		.program = program,
 		.stack = arena_alloc(arena, 1024 * sizeof(Value)),
-		.stack_pos = -1,
+		.stack_pos = (size_t) -1,
 		.stack_len = 1024,
 		.frame_stack = arena_alloc(arena, 1024 * sizeof(Value)),
 		.frame_stack_pos = 0,
@@ -2686,12 +2690,12 @@ print_constant(Program *program, u16 constant_index, FILE *f, bool raw)
 				break;
 			}
 			case OP_JUMP: {
-				i16 offset = read_u16(&ip);
+				i16 offset = (i16) read_u16(&ip);
 				fprintf(f, "jump %+"PRIi16"=%zu", offset, (size_t)(ip - start) + offset);
 				break;
 			}
 			case OP_BRANCH: {
-				i16 offset = read_u16(&ip);
+				i16 offset = (i16) read_u16(&ip);
 				fprintf(f, "branch %+"PRIi16"=%zu", offset, (size_t)(ip - start) + offset);
 				break;
 			}
@@ -2743,8 +2747,8 @@ void
 disassemble(Program *program, FILE *f)
 {
 	fprintf(f, "Constant Pool:\n");
-	for (size_t i = 0; i < program->constant_cnt; i++) {
-		fprintf(f, "%5zu: ", i);
+	for (u16 i = 0; i < program->constant_cnt; i++) {
+		fprintf(f, "%5"PRIu16": ", i);
 		print_constant(program, i, f, true);
 		fprintf(f, "\n");
 	}
@@ -2775,7 +2779,11 @@ read_file(ErrorContext *ec, Arena *arena, const char *name)
 	if (fseek(f, 0, SEEK_END) != 0) {
 		argument_error(ec, "Failed seek in file '%s': %s", name, strerror(errno));
 	}
-	size_t fsize = ftell(f);
+	long tell = ftell(f);
+	if (tell < 0) {
+		argument_error(ec, "Failed to ftell a file '%s': %s", name, strerror(errno));
+	}
+	size_t fsize = (size_t) tell;
 	assert(fseek(f, 0, SEEK_SET) == 0);
 	u8 *buf = arena_alloc(arena, fsize);
 	size_t read;
@@ -2812,7 +2820,8 @@ cmd_parse(ErrorContext *ec, Arena *arena, int argc, const char **argv)
 		} else {
 			argument_error(ec, "Unknown flag '%s'", argv[0]);
 		}
-		argc--, argv++;
+		argc--;
+		argv++;
 	}
 	if (argc != 1) {
 		argument_error(ec, "Expected FILE as a single positional argument\n");
@@ -2846,24 +2855,27 @@ cmd_run(ErrorContext *ec, Arena *arena, int argc, const char **argv)
 	FILE *heap_log = NULL;
 	while (argc > 0 && argv[0][0] == '-') {
 		if (strcmp(argv[0], "--heap-log") == 0) {
-			argc--, argv++;
+			argc--;
+			argv++;
 			heap_log = fopen(argv[0], "wb");
 			if (!heap_log) {
 				argument_error(ec, "Failed to open heap log '%s': %s", argv[0], strerror(errno));
 			}
 		} else if (strcmp(argv[0], "--heap-size") == 0) {
-			argc--, argv++;
+			argc--;
+			argv++;
 			char *end;
 			errno = 0;
 			long long num = strtoll(argv[0], &end, 10);
 			if (errno != 0 || end == argv[0] || num < 0 || (unsigned long long) num > SIZE_MAX) {
 				argument_error(ec, "Invalid heap size '%s'", argv[0]);
 			}
-			heap_size = num;
+			heap_size = (size_t) num;
 		} else {
 			argument_error(ec, "Unknown flag '%s'", argv[0]);
 		}
-		argc--, argv++;
+		argc--;
+		argv++;
 	}
 	if (argc != 1) {
 		argument_error(ec, "Expected FILE as a single argument\n");
@@ -3007,7 +3019,6 @@ static struct {
     const char *help;
 } commands[] = {
     #define CMD(name, short_help) { #name, cmd_##name, short_help, cmd_##name ##_help },
-    #define CMD_ALIAS(alias, target) { #alias, cmd_##target, NULL, NULL },
     CMD(run, "Run a program with the bytecode interpreter")
     CMD(bc_compile, "Compile a program to bytecode")
     CMD(bc_interpret, "Interpret bytecode")
