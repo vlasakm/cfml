@@ -247,9 +247,9 @@ static void
 heap_init(Heap *heap, ErrorContext *ec, void (*gc_func)(Heap *heap), size_t size, FILE *log)
 {
 	if (size == 0) {
-		// 100 MiB
-		size = 100;
+		size = 1024;
 	}
+	// MiB
 	size = size * 1024 * 1024;
 	*heap = (Heap) {
 		.ec = ec,
