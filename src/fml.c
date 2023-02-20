@@ -21,6 +21,9 @@
 #define garena_array_from(arena, start, type) \
 	((type *) garena_from((arena), (start), alignof(type)))
 
+#define container_of(member_ptr, type, member) \
+	((type *) ((u8 *)(member_ptr) - offsetof(type, member)))
+
 
 #define UNREACHABLE() unreachable(__FILE__, __LINE__)
 static _Noreturn void
@@ -217,6 +220,7 @@ exec_error(ErrorContext *ec, const char *msg, ...)
 
 struct Heap {
 	ErrorContext *ec;
+	void (*gc_func)(Heap *heap);
 	FILE *log;
 	//u8 *mem;
 	size_t pos;
@@ -240,7 +244,7 @@ heap_log(Heap *heap, const char *event)
 
 
 static void
-heap_init(Heap *heap, ErrorContext *ec, size_t size, FILE *log)
+heap_init(Heap *heap, ErrorContext *ec, void (*gc_func)(Heap *heap), size_t size, FILE *log)
 {
 	if (size == 0) {
 		// 100 MiB
@@ -249,6 +253,7 @@ heap_init(Heap *heap, ErrorContext *ec, size_t size, FILE *log)
 	size = size * 1024 * 1024;
 	*heap = (Heap) {
 		.ec = ec,
+		.gc_func = gc_func,
 		.log = log,
 		.pos = 0,
 		.size = size,
@@ -279,7 +284,11 @@ heap_alloc(Heap *heap, size_t size)
 {
 	size_t pos = align(heap->pos, 8);
 	if (pos + size > heap->size) {
-		exec_error(heap->ec, "Heap space exhausted");
+		heap->gc_func(heap);
+		pos = align(heap->pos, 8);
+		if (pos + size > heap->size) {
+			exec_error(heap->ec, "Heap space exhausted");
+		}
 	}
 	heap->pos = pos + size;
 	heap_log(heap, "A");
@@ -1097,6 +1106,12 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 	return return_value;
 }
 
+static void
+gc_none(Heap *heap)
+{
+	(void) heap;
+}
+
 void
 interpret_ast(ErrorContext *ec, Arena *arena, Ast *ast, size_t heap_size, FILE *heap_log)
 {
@@ -1108,7 +1123,7 @@ interpret_ast(ErrorContext *ec, Arena *arena, Ast *ast, size_t heap_size, FILE *
 		.global_env = env,
 		.heap = {0},
 	};
-	heap_init(&is->heap, ec, heap_size, heap_log);
+	heap_init(&is->heap, ec, gc_none, heap_size, heap_log);
 	env_define(is->env, STR("this"), make_null(&is->heap));
 	interpret(is, ast);
 	env_destroy(env);
@@ -1571,6 +1586,13 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 }
 
 static void
+gc_vm(Heap *heap)
+{
+	VM *vm = container_of(heap, VM, heap);
+	(void) vm;
+}
+
+static void
 vm_run(ErrorContext *ec, Arena *arena, Program *program, size_t heap_size, FILE *heap_log)
 {
 	VM *vm = arena_alloc(arena, sizeof(*vm));
@@ -1588,7 +1610,7 @@ vm_run(ErrorContext *ec, Arena *arena, Program *program, size_t heap_size, FILE 
 		.frame_stack_len = 1024,
 		.bp = 0,
 	};
-	heap_init(&vm->heap, ec, heap_size, heap_log);
+	heap_init(&vm->heap, ec, gc_vm, heap_size, heap_log);
 	vm->global = vm_instantiate_class(vm, &program->global_class, make_null_vm);
 	// push `this` as an argument
 	vm->stack[++vm->stack_pos] = make_null(&vm->heap);
