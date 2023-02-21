@@ -3085,7 +3085,7 @@ main(int argc, const char **argv) {
 		if (strcmp(command, commands[i].name) != 0) {
 			continue;
 		}
-		if (argc >= 1 && (strcmp(argv[0], "-h") == 0 || strcmp(argv[0], "--help") == 0)) {
+		if (argc >= 3 && (strcmp(argv[2], "-h") == 0 || strcmp(argv[2], "--help") == 0)) {
 			print_help(stdout, command);
 			//printf("USAGE:\n\tfml %s\t%s\n", command, commands[i].help);
 			//printf("%s", commands[i].help);
