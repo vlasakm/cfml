@@ -3041,7 +3041,9 @@ print_help(FILE *file, const char *command)
 			if (strcmp(command, commands[i].name) != 0) {
 				continue;
 			}
-			fputs(commands[i].help, file);
+			fprintf(file, "fml-%s\n", command);
+			fprintf(file, "%s\n\n", commands[i].short_help);
+			fprintf(file, "%s", commands[i].help);
 			return;
 		}
 		file = stderr;
