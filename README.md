@@ -118,7 +118,7 @@ following file `example.fml` are below.
 print("1 + 1 = ~\n", 1 + 1);
 ```
 
-### run
+### `run`
 
 Take a FML source file and run it. (Through bytecode compilation and
 interpretation.)
@@ -142,7 +142,7 @@ $ builddir/fml run example.fml
 1 + 2 = 3
 ```
 
-### bc_compile
+### `bc_compile`
 
 Take a FML source file, compile it to bytecode and serialize the bytecode into standard output.
 
@@ -167,7 +167,7 @@ $ hexdump -C example.bc
 0000004c
 ```
 
-### bc_interpret
+### `bc_interpret`
 
 Take a bytecode file as an argument and run it with the bytecode interpreter.
 
@@ -186,7 +186,7 @@ $ builddir/fml bc_interpret example.bc
 1 + 2 = 3
 ```
 
-### bc_disassemble
+### `bc_disassemble`
 
 Take a bytecode file as an argument and output it's human readable
 representation ("disassembly") to standard output.
@@ -222,7 +222,7 @@ Entry: #5
 Globals: #3="a"
 ```
 
-### bc_dump
+### `bc_dump`
 
 Take a FML source file as an argument, compile it to bytecode and print human
 readable representation ("disassembly") of the bytecode to standard output.
