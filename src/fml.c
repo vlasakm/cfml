@@ -2810,7 +2810,6 @@ static const char cmd_parse_help[] = \
 	"\n"
 	"OPTIONS:\n"
 	"    --top   Parse whole program, not just single expression\n"
-	"\n"
 ;
 
 static void
@@ -2848,7 +2847,6 @@ static const char cmd_run_help[] = \
 	"OPTIONS:\n"
 	"    --heap-log LOG_FILE   Heap log file, if none no logging is done\n"
 	"    --heap-size MBs       Maximum heap size in mebibytes\n"
-	"\n"
 ;
 
 static void
@@ -3008,8 +3006,10 @@ cmd_help(ErrorContext *ec, Arena *arena, int argc, const char **argv)
 	(void) arena;
 	if (argc == 0) {
 		print_help(stdout, NULL);
+		return;
 	} else if (argc != 1) {
 		argument_error(ec, "Expected COMMAND as an argument\n");
+		return;
 	}
 	print_help(stdout, argv[0]);
 
@@ -3087,8 +3087,6 @@ main(int argc, const char **argv) {
 		}
 		if (argc >= 3 && (strcmp(argv[2], "-h") == 0 || strcmp(argv[2], "--help") == 0)) {
 			print_help(stdout, command);
-			//printf("USAGE:\n\tfml %s\t%s\n", command, commands[i].help);
-			//printf("%s", commands[i].help);
 			goto end;
 		}
 		commands[i].func(&ec, arena, argc - 2, argv + 2);
