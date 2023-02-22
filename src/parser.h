@@ -36,6 +36,16 @@ typedef struct {
 } Str;
 #define STR(lit) (Str) { .str = (const u8 *) lit, .len = sizeof(lit) - 1 }
 
+// Compare equality of strings, returns true if equal, false otherwise.
+bool str_eq(Str a, Str b);
+
+// Lexicographically compare two strings. Returns:
+//  - 0 if the strings are equal,
+//  - a negative number if the first string is less than the second
+//  - a positive number if the first string is greater than the second
+int str_cmp(Str a, Str b);
+
+
 // See https://courses.fit.cvut.cz/NI-RUN/specs/ast.html for details about the
 // AST.
 

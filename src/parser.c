@@ -9,9 +9,19 @@
 _Noreturn void
 unreachable(char *file, size_t line)
 {
-	fprintf(stderr, "ERROR: unreachable code reached at %s:%zu\n", file,
-			line);
+	fprintf(stderr, "ERROR: unreachable code reached at %s:%zu\n", file, line);
 	exit(EXIT_FAILURE);
+}
+
+bool str_eq(Str a, Str b)
+{
+	return a.len == b.len && memcmp(a.str, b.str, a.len) == 0;
+}
+
+int str_cmp(Str a, Str b)
+{
+	int cmp = memcmp(a.str, b.str, a.len < b.len ? a.len : b.len);
+	return cmp == 0 ? (a.len > b.len) - (b.len > a.len) : cmp;
 }
 
 typedef struct {

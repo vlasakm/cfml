@@ -36,12 +36,6 @@ unreachable(char *file, size_t line)
 	exit(EXIT_FAILURE);
 }
 
-bool
-str_eq(Str a, Str b)
-{
-	return a.len == b.len && memcmp(a.str, b.str, a.len) == 0;
-}
-
 // FNV-1a hash
 // http://www.isthe.com/chongo/tech/comp/fnv/
 u64
@@ -441,13 +435,6 @@ value_as_function_bc(Value value)
 {
 	assert(value.kind == VK_FUNCTION);
 	return (u16) value.function_index;
-}
-
-static int
-str_cmp(Str a, Str b)
-{
-	int cmp = memcmp(a.str, b.str, a.len < b.len ? a.len : b.len);
-	return cmp == 0 ? (a.len > b.len) - (b.len > a.len) : cmp;
 }
 
 void
