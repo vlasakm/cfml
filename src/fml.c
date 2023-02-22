@@ -1632,10 +1632,8 @@ typedef struct {
 	Arena *arena;
 	GArena constants; // Constant array
 	GArena instructions; // u8 array
-	GArena members; // u16 array (but unaligned when serialized)
-	bool in_object;
+	GArena globals; // u16 array (but unaligned when serialized)
 	bool in_block;
-	bool in_definition;
 	Environment *env;
 	u16 local_cnt;
 	bool had_error;
@@ -1697,32 +1695,19 @@ add_string(CompilerState *cs, Str name)
 	});
 }
 
-static Class
-create_class(CompilerState *cs, size_t start)
+static u16
+add_global_name_once(CompilerState *cs, Str name)
 {
-	size_t member_cnt = garena_cnt_from(&cs->members, start, u16);
-	u16 *members = move_to_arena(cs->arena, &cs->members, start, u16);
-	for (size_t i = 0; i < member_cnt; i++) {
-		for (size_t j = i + 1; j < member_cnt; j++) {
-			// can be constant index comparison since we deduplicate
-			// constants
-			if (members[i] != members[j]) {
-				continue;
-			}
-			const char *type = cs->in_object ? "Member" : "Global";
-			Str name = garena_array(&cs->constants, Constant)[members[i]].string;
-			if (members[i] == members[j]) {
-				compile_error(cs, "%s '%.*s' already defined", type, (int) name.len, name.str);
-			}
+	u16 name_index = add_string(cs, name);
+	size_t cnt = garena_cnt(&cs->globals, u16);
+	u16 *globals = garena_array(&cs->globals, u16);
+	for (size_t i = cnt; i--;) {
+		if (globals[i] == name_index) {
+			return name_index;
 		}
 	}
-	// NOTE: due to losing alignment when serializing, we refer to
-	// members with `u8` pointers while compiling them as if they
-	// were u16
-	return (Class) {
-		.member_cnt = member_cnt,
-		.members = (u8 *) members,
-	};
+	garena_push_value(&cs->globals, u16, name_index);
+	return name_index;
 }
 
 static void
@@ -1910,37 +1895,34 @@ compile(CompilerState *cs, Ast *ast)
 	case AST_OBJECT: {
 		AstObject *object = (AstObject *) ast;
 		compile(cs, object->extends);
-		bool saved_in_object = cs->in_object;
-		bool saved_in_definition = cs->in_definition;
 		bool saved_in_block = cs->in_block;
-		size_t start = garena_save(&cs->members);
 
-		cs->in_object = true;
-		cs->in_definition = false;
 		// each individual definition value is compiled in it's own local
 		// scope
 		cs->in_block = true;
+		u16 *members = arena_alloc(cs->arena, object->member_cnt * sizeof(*members));
 		for (size_t i = 0; i < object->member_cnt; i++) {
-			Ast *ast_member = object->members[i];
-			switch (ast_member->kind) {
-			case AST_DEFINITION: {
-				Environment *saved_environment = cs->env;
-				cs->env = env_create(cs->env);
-				compile(cs, ast_member);
-				env_destroy(cs->env);
-				cs->env = saved_environment;
-				break;
-			}
-			default: UNREACHABLE();
-			}
+			assert(object->members[i]->kind == AST_DEFINITION);
+			AstDefinition *definition = (AstDefinition *) object->members[i];
+			members[i] = add_string(cs, definition->name);
+			Environment *saved_environment = cs->env;
+			cs->env = env_create(cs->env);
+			compile(cs, definition->value);
+			env_destroy(cs->env);
+			cs->env = saved_environment;
 		}
-
-		Class class = create_class(cs, start);
-		u16 class_index = add_constant(cs, (Constant) { .kind = CK_CLASS, .class = class });
+		// NOTE: due to losing alignment when serializing, we refer to
+		// members with `u8` pointers while compiling them as if they
+		// were u16
+		u16 class_index = add_constant(cs, (Constant) {
+			.kind = CK_CLASS,
+			.class = (Class) {
+				.member_cnt = object->member_cnt,
+				.members = (u8 *) members,
+			},
+		});
 		op_index(cs, OP_OBJECT, class_index);
 
-		cs->in_object = saved_in_object;
-		cs->in_definition = saved_in_definition;
 		cs->in_block = saved_in_block;
 		return;
 	}
@@ -1950,11 +1932,9 @@ compile(CompilerState *cs, Ast *ast)
 		u16 saved_local_cnt = cs->local_cnt;
 		size_t start = garena_save(&cs->instructions);
 		bool saved_in_block = cs->in_block;
-		bool saved_in_object = cs->in_object;
 
 		cs->local_cnt = 0;
 		cs->in_block = true;
-		cs->in_object = false;
 
 		// Start with empty environment
 		cs->env = env_create(NULL);
@@ -1980,25 +1960,18 @@ compile(CompilerState *cs, Ast *ast)
 		cs->env = saved_environment;
 		cs->local_cnt = saved_local_cnt;
 		cs->in_block = saved_in_block;
-		cs->in_object = saved_in_object;
 		return;
 	}
 
 	case AST_DEFINITION: {
 		AstDefinition *definition = (AstDefinition *) ast;
-		bool saved_in_definition = cs->in_definition;
-		cs->in_definition = true;
 		compile(cs, definition->value);
-		cs->in_definition = saved_in_definition;
-		if ((cs->in_object && !cs->in_definition) || !cs->in_block) {
-			u16 name = add_string(cs, definition->name);
-			garena_push_value(&cs->members, u16, name);
-			if (!cs->in_object) {
-				op_string(cs, OP_SET_GLOBAL, definition->name);
-			}
-		} else {
+		if (cs->in_block) {
 			u16 local = define_local(cs, definition->name);
 			op_index(cs, OP_SET_LOCAL, local);
+		} else {
+			u16 global = add_global_name_once(cs, definition->name);
+			op_index(cs, OP_SET_GLOBAL, global);
 		}
 		return;
 	}
@@ -2009,7 +1982,8 @@ compile(CompilerState *cs, Ast *ast)
 		if (lookup_local(cs, variable_access->name, &local)) {
 			op_index(cs, OP_GET_LOCAL, local);
 		} else {
-			op_string(cs, OP_GET_GLOBAL, variable_access->name);
+			u16 global = add_global_name_once(cs, variable_access->name);
+			op_index(cs, OP_GET_GLOBAL, global);
 		}
 		return;
 	}
@@ -2020,7 +1994,8 @@ compile(CompilerState *cs, Ast *ast)
 		if (lookup_local(cs, variable_assignment->name, &local)) {
 			op_index(cs, OP_SET_LOCAL, local);
 		} else {
-			op_string(cs, OP_SET_GLOBAL, variable_assignment->name);
+			u16 global = add_global_name_once(cs, variable_assignment->name);
+			op_index(cs, OP_SET_GLOBAL, global);
 		}
 		return;
 	}
@@ -2188,16 +2163,14 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 		.arena = arena,
 		.constants = {0},
 		.instructions = {0},
-		.members = {0},
-		.in_object = false,
+		.globals = {0},
 		.in_block = false,
-		.in_definition = false,
 		.env = env_create(NULL),
 		.local_cnt = 0,
 	};
 	garena_init(&cs.constants);
 	garena_init(&cs.instructions);
-	garena_init(&cs.members);
+	garena_init(&cs.globals);
 
 	size_t start = garena_save(&cs.instructions);
 	define_local(&cs, STR("this"));
@@ -2219,14 +2192,22 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	program->constant_cnt = garena_cnt(&cs.constants, Constant);
 	program->constants = move_to_arena(cs.arena, &cs.constants, 0, Constant);
 
-	program->global_class = create_class(&cs, 0);
+	size_t global_cnt = garena_cnt_from(&cs.globals, 0, u16);
+	u16 *globals = move_to_arena(cs.arena, &cs.globals, 0, u16);
+	// NOTE: due to losing alignment when serializing, we refer to
+	// members with `u8` pointers while compiling them as if they
+	// were u16
+	program->global_class = (Class) {
+		.member_cnt = global_cnt,
+		.members = (u8 *) globals,
+	};
 
 	program->entry_point = entry_point;
 
 	env_destroy(cs.env);
 	garena_destroy(&cs.constants);
 	garena_destroy(&cs.instructions);
-	garena_destroy(&cs.members);
+	garena_destroy(&cs.globals);
 
 	if (cs.had_error) {
 		arena_restore(arena, arena_start);

@@ -532,6 +532,15 @@ object(Parser *parser)
 		if (object->members[i]->kind != AST_DEFINITION) {
 			parser_error(parser, object_tok, false, "Found object member that is not a definition");
 		}
+		AstDefinition *member = (AstDefinition *) object->members[i];
+		for (size_t j = 0; j < i; j++) {
+			AstDefinition *other = (AstDefinition *) object->members[j];
+			if (str_eq(member->name, other->name)) {
+				const u8 *str = member->name.str;
+				size_t len = member->name.len;
+				parser_error(parser, object_tok, false, "Found multiple times the object member '%.*s'", len, str);
+			}
+		}
 	}
 	return &object->base;
 }
