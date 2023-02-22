@@ -3062,8 +3062,6 @@ print_help(FILE *file, const char *command)
 
 int
 main(int argc, const char **argv) {
-	//return 0;
-
 	Arena arena_;
 	Arena *arena = &arena_;
 	arena_init(arena);
