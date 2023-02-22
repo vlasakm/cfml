@@ -840,20 +840,22 @@ typedef struct {
 	Heap heap;
 } InterpreterState;
 
-Environment *
-env_create(Environment *prev)
+void
+env_push(Environment **prev)
 {
 	Environment *env = calloc(sizeof(*env), 1);
-	env->prev = prev;
 	table_init(&env->env, 0);
-	return env;
+	env->prev = *prev;
+	*prev = env;
 }
 
 void
-env_destroy(Environment *env)
+env_pop(Environment **env)
 {
-	table_destroy(&env->env);
-	free(env);
+	Environment *old = *env;
+	(*env) = (*env)->prev;
+	table_destroy(&old->env);
+	free(old);
 }
 
 void
@@ -914,12 +916,10 @@ interpret(InterpreterState *is, Ast *ast)
 		size_t size = value_as_size(is->ec, size_value);
 		Value array_value = make_array(&is->heap, size);
 		Array *array_obj = value_as_array(array_value);
-		Environment *saved_env = is->env;
 		for (size_t i = 0; i < size; i++) {
-			is->env = env_create(saved_env);
+			env_push(&is->env);
 			array_obj->values[i] = interpret(is, array->initializer);
-			env_destroy(is->env);
-			is->env = saved_env;
+			env_pop(&is->env);
 		}
 		return array_value;
 	}
@@ -935,11 +935,9 @@ interpret(InterpreterState *is, Ast *ast)
 			case AST_DEFINITION: {
 				AstDefinition *definition = (AstDefinition *) ast_member;
 				object_obj->fields[i].name = definition->name;
-				Environment *saved_env = is->env;
-				is->env = env_create(is->env);
+				env_push(&is->env);
 				object_obj->fields[i].value = interpret(is, definition->value);
-				env_destroy(is->env);
-				is->env = saved_env;
+				env_pop(&is->env);
 				break;
 			}
 			default:
@@ -1012,26 +1010,22 @@ interpret(InterpreterState *is, Ast *ast)
 	case AST_CONDITIONAL: {
 		AstConditional *conditional = (AstConditional *) ast;
 		Value condition = interpret(is, conditional->condition);
-		Environment *saved_env = is->env;
-		is->env = env_create(is->env);
+		env_push(&is->env);
 		Value result;
 		if (value_to_bool(condition)) {
 			result = interpret(is, conditional->consequent);
 		} else {
 			result = interpret(is, conditional->alternative);
 		}
-		env_destroy(is->env);
-		is->env = saved_env;
+		env_pop(&is->env);
 		return result;
 	}
 	case AST_LOOP: {
 		AstLoop *loop = (AstLoop *) ast;
-		Environment *saved_env = is->env;
 		while (value_to_bool(interpret(is, loop->condition))) {
-			is->env = env_create(is->env);
+			env_push(&is->env);
 			interpret(is, loop->body);
-			env_destroy(is->env);
-			is->env = saved_env;
+			env_pop(&is->env);
 		}
 		return make_null(&is->heap);
 	}
@@ -1047,14 +1041,12 @@ interpret(InterpreterState *is, Ast *ast)
 	}
 	case AST_BLOCK: {
 		AstBlock *block = (AstBlock *) ast;
-		Environment *saved_env = is->env;
-		is->env = env_create(is->env);
+		env_push(&is->env);
 		Value value = interpret(is, block->expressions[0]);
 		for (size_t i = 1; i < block->expression_cnt; i++) {
 			value = interpret(is, block->expressions[i]);
 		}
-		env_destroy(is->env);
-		is->env = saved_env;
+		env_pop(&is->env);
 		return value;
 	}
 	case AST_TOP: {
@@ -1097,7 +1089,8 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 		// Starting with _only_ the global environment, add the function
 		// arguments to the scope
 		Environment *saved_env = is->env;
-		is->env = env_create(is->global_env);
+		is->env = is->global_env;
+		env_push(&is->env);
 		for (size_t i = 0; i < argument_cnt; i++) {
 			env_define(is->env, function->parameters[i], arguments[i]);
 		}
@@ -1105,7 +1098,7 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 			env_define(is->env, STR("this"), object);
 		}
 		return_value = interpret(is, function->body);
-		env_destroy(is->env);
+		env_pop(&is->env);
 		is->env = saved_env;
 	} else {
 		return_value = value_call_primitive_method(is->ec, &is->heap, object, method, &arguments[0], argument_cnt);
@@ -1123,18 +1116,19 @@ gc_none(Heap *heap)
 void
 interpret_ast(ErrorContext *ec, Arena *arena, Ast *ast, size_t heap_size, FILE *heap_log)
 {
-	Environment *env = env_create(NULL);
 	InterpreterState *is = arena_alloc(arena, sizeof(*is));
 	*is = (InterpreterState) {
 		.ec = ec,
-		.env = env,
-		.global_env = env,
+		.env = NULL,
+		.global_env = NULL,
 		.heap = {0},
 	};
+	env_push(&is->env);
+	is->global_env = is->env;
 	heap_init(&is->heap, ec, gc_none, heap_size, heap_log);
 	env_define(is->env, STR("this"), make_null(&is->heap));
 	interpret(is, ast);
-	env_destroy(env);
+	env_pop(&is->env);
 }
 
 // Parse little endian numbers from byte array. Beware of implicit promotion from uint8_t to signed int.
@@ -1870,14 +1864,12 @@ compile(CompilerState *cs, Ast *ast)
 		jump(cs, OP_JUMP, &condition_to_after);
 		size_t init = inst_pos(cs);
 		op_index(cs, OP_GET_LOCAL, i_var);
-		Environment *saved_environment = cs->env;
 		bool saved_in_block = cs->in_block;
-		cs->env = env_create(cs->env);
 		cs->in_block = true;
+		env_push(&cs->env);
 		compile(cs, array->initializer);
 		cs->in_block = saved_in_block;
-		env_destroy(cs->env);
-		cs->env = saved_environment;
+		env_pop(&cs->env);
 		op_string_cnt(cs, OP_CALL_METHOD, STR("set"), 3);
 		op(cs, OP_DROP);
 		op_index(cs, OP_GET_LOCAL, i_var);
@@ -1905,11 +1897,9 @@ compile(CompilerState *cs, Ast *ast)
 			assert(object->members[i]->kind == AST_DEFINITION);
 			AstDefinition *definition = (AstDefinition *) object->members[i];
 			members[i] = add_string(cs, definition->name);
-			Environment *saved_environment = cs->env;
-			cs->env = env_create(cs->env);
+			env_push(&cs->env);
 			compile(cs, definition->value);
-			env_destroy(cs->env);
-			cs->env = saved_environment;
+			env_pop(&cs->env);
 		}
 		// NOTE: due to losing alignment when serializing, we refer to
 		// members with `u8` pointers while compiling them as if they
@@ -1937,14 +1927,15 @@ compile(CompilerState *cs, Ast *ast)
 		cs->in_block = true;
 
 		// Start with empty environment
-		cs->env = env_create(NULL);
+		cs->env = NULL;
+		env_push(&cs->env);
 		define_local(cs, STR("this"));
 		for (size_t i = 0; i < function->parameter_cnt; i++) {
 			define_local(cs, function->parameters[i]);
 		}
 		compile(cs, function->body);
 		op(cs, OP_RETURN);
-		env_destroy(cs->env);
+		env_pop(&cs->env);
 
 		size_t instruction_len = garena_cnt_from(&cs->instructions, start, u8);
 		u8 *instruction_start = move_to_arena(cs->arena, &cs->instructions, start, u8);
@@ -2061,26 +2052,22 @@ compile(CompilerState *cs, Ast *ast)
 		jump(cs, OP_JUMP, &cond_to_alternative);
 		size_t consequent = inst_pos(cs);
 		{
-			Environment *saved_environment = cs->env;
-			cs->env = env_create(cs->env);
+			env_push(&cs->env);
 			bool saved_in_block = cs->in_block;
 			cs->in_block = true;
 			compile(cs, conditional->consequent);
 			cs->in_block = saved_in_block;
-			env_destroy(cs->env);
-			cs->env = saved_environment;
+			env_pop(&cs->env);
 		}
 		jump(cs, OP_JUMP, &consequent_to_after);
 		size_t alternative = inst_pos(cs);
 		{
-			Environment *saved_environment = cs->env;
-			cs->env = env_create(cs->env);
+			env_push(&cs->env);
 			bool saved_in_block = cs->in_block;
 			cs->in_block = true;
 			compile(cs, conditional->alternative);
 			cs->in_block = saved_in_block;
-			env_destroy(cs->env);
-			cs->env = saved_environment;
+			env_pop(&cs->env);
 		}
 
 		jump_fixup(cs, cond_to_consequent, consequent);
@@ -2101,14 +2088,12 @@ compile(CompilerState *cs, Ast *ast)
 		size_t body = inst_pos(cs);
 		// Drop value from previous iteration (or the initial null)
 		op(cs, OP_DROP);
-		Environment *saved_environment = cs->env;
-		cs->env = env_create(cs->env);
+		env_push(&cs->env);
 		bool saved_in_block = cs->in_block;
 		cs->in_block = true;
 		compile(cs, loop->body);
 		cs->in_block = saved_in_block;
-		env_destroy(cs->env);
-		cs->env = saved_environment;
+		env_pop(&cs->env);
 		jump_to(cs, OP_JUMP, condition);
 
 		jump_fixup(cs, condition_to_body, body);
@@ -2125,17 +2110,15 @@ compile(CompilerState *cs, Ast *ast)
 	}
 	case AST_BLOCK: {
 		AstBlock *block = (AstBlock *) ast;
-		Environment *saved_environment = cs->env;
 		bool saved_in_block = cs->in_block;
 		cs->in_block = true;
-		cs->env = env_create(cs->env);
+		env_push(&cs->env);
 		compile(cs, block->expressions[0]);
 		for (size_t i = 1; i < block->expression_cnt; i++) {
 			op(cs, OP_DROP);
 			compile(cs, block->expressions[i]);
 		}
-		env_destroy(cs->env);
-		cs->env = saved_environment;
+		env_pop(&cs->env);
 		cs->in_block = saved_in_block;
 		return;
 	}
@@ -2165,7 +2148,7 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 		.instructions = {0},
 		.globals = {0},
 		.in_block = false,
-		.env = env_create(NULL),
+		.env = NULL,
 		.local_cnt = 0,
 	};
 	garena_init(&cs.constants);
@@ -2173,8 +2156,10 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	garena_init(&cs.globals);
 
 	size_t start = garena_save(&cs.instructions);
+	env_push(&cs.env);
 	define_local(&cs, STR("this"));
 	compile(&cs, ast);
+	env_pop(&cs.env);
 	op(&cs, OP_RETURN);
 
 	size_t instruction_len = garena_cnt_from(&cs.instructions, start, u8);
@@ -2204,7 +2189,6 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 
 	program->entry_point = entry_point;
 
-	env_destroy(cs.env);
 	garena_destroy(&cs.constants);
 	garena_destroy(&cs.instructions);
 	garena_destroy(&cs.globals);
