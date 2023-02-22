@@ -880,6 +880,7 @@ env_lookup(InterpreterState *is, Str name)
 {
 	Value *lvalue = env_lookup_raw(is->env, name);
 	if (!lvalue) {
+		//exec_error(is->ec, "Unknown reference to '%.*s'", name.len, name.str);
 		// Name not found, should be a global whose
 		// definition we will yet see.
 		Value null = make_null(&is->heap);
@@ -934,7 +935,11 @@ interpret(InterpreterState *is, Ast *ast)
 			case AST_DEFINITION: {
 				AstDefinition *definition = (AstDefinition *) ast_member;
 				object_obj->fields[i].name = definition->name;
+				Environment *saved_env = is->env;
+				is->env = env_create(is->env);
 				object_obj->fields[i].value = interpret(is, definition->value);
+				env_destroy(is->env);
+				is->env = saved_env;
 				break;
 			}
 			default:
@@ -1007,16 +1012,26 @@ interpret(InterpreterState *is, Ast *ast)
 	case AST_CONDITIONAL: {
 		AstConditional *conditional = (AstConditional *) ast;
 		Value condition = interpret(is, conditional->condition);
+		Environment *saved_env = is->env;
+		is->env = env_create(is->env);
+		Value result;
 		if (value_to_bool(condition)) {
-			return interpret(is, conditional->consequent);
+			result = interpret(is, conditional->consequent);
 		} else {
-			return interpret(is, conditional->alternative);
+			result = interpret(is, conditional->alternative);
 		}
+		env_destroy(is->env);
+		is->env = saved_env;
+		return result;
 	}
 	case AST_LOOP: {
 		AstLoop *loop = (AstLoop *) ast;
+		Environment *saved_env = is->env;
 		while (value_to_bool(interpret(is, loop->condition))) {
+			is->env = env_create(is->env);
 			interpret(is, loop->body);
+			env_destroy(is->env);
+			is->env = saved_env;
 		}
 		return make_null(&is->heap);
 	}
@@ -1871,8 +1886,11 @@ compile(CompilerState *cs, Ast *ast)
 		size_t init = inst_pos(cs);
 		op_index(cs, OP_GET_LOCAL, i_var);
 		Environment *saved_environment = cs->env;
+		bool saved_in_block = cs->in_block;
 		cs->env = env_create(cs->env);
+		cs->in_block = true;
 		compile(cs, array->initializer);
+		cs->in_block = saved_in_block;
 		env_destroy(cs->env);
 		cs->env = saved_environment;
 		op_string_cnt(cs, OP_CALL_METHOD, STR("set"), 3);
@@ -1894,16 +1912,25 @@ compile(CompilerState *cs, Ast *ast)
 		compile(cs, object->extends);
 		bool saved_in_object = cs->in_object;
 		bool saved_in_definition = cs->in_definition;
+		bool saved_in_block = cs->in_block;
 		size_t start = garena_save(&cs->members);
 
 		cs->in_object = true;
 		cs->in_definition = false;
+		// each individual definition value is compiled in it's own local
+		// scope
+		cs->in_block = true;
 		for (size_t i = 0; i < object->member_cnt; i++) {
 			Ast *ast_member = object->members[i];
 			switch (ast_member->kind) {
-			case AST_DEFINITION:
+			case AST_DEFINITION: {
+				Environment *saved_environment = cs->env;
+				cs->env = env_create(cs->env);
 				compile(cs, ast_member);
+				env_destroy(cs->env);
+				cs->env = saved_environment;
 				break;
+			}
 			default: UNREACHABLE();
 			}
 		}
@@ -1914,6 +1941,7 @@ compile(CompilerState *cs, Ast *ast)
 
 		cs->in_object = saved_in_object;
 		cs->in_definition = saved_in_definition;
+		cs->in_block = saved_in_block;
 		return;
 	}
 	case AST_FUNCTION: {
@@ -1962,13 +1990,11 @@ compile(CompilerState *cs, Ast *ast)
 		cs->in_definition = true;
 		compile(cs, definition->value);
 		cs->in_definition = saved_in_definition;
-		if (cs->in_object || !cs->in_block) {
+		if ((cs->in_object && !cs->in_definition) || !cs->in_block) {
 			u16 name = add_string(cs, definition->name);
 			garena_push_value(&cs->members, u16, name);
 			if (!cs->in_object) {
 				op_string(cs, OP_SET_GLOBAL, definition->name);
-			} else if (cs->in_definition) {
-				compile_error(cs, "Nested definition (in definition) in object not allowed");
 			}
 		} else {
 			u16 local = define_local(cs, definition->name);
@@ -2059,10 +2085,28 @@ compile(CompilerState *cs, Ast *ast)
 		jump(cs, OP_BRANCH, &cond_to_consequent);
 		jump(cs, OP_JUMP, &cond_to_alternative);
 		size_t consequent = inst_pos(cs);
-		compile(cs, conditional->consequent);
+		{
+			Environment *saved_environment = cs->env;
+			cs->env = env_create(cs->env);
+			bool saved_in_block = cs->in_block;
+			cs->in_block = true;
+			compile(cs, conditional->consequent);
+			cs->in_block = saved_in_block;
+			env_destroy(cs->env);
+			cs->env = saved_environment;
+		}
 		jump(cs, OP_JUMP, &consequent_to_after);
 		size_t alternative = inst_pos(cs);
-		compile(cs, conditional->alternative);
+		{
+			Environment *saved_environment = cs->env;
+			cs->env = env_create(cs->env);
+			bool saved_in_block = cs->in_block;
+			cs->in_block = true;
+			compile(cs, conditional->alternative);
+			cs->in_block = saved_in_block;
+			env_destroy(cs->env);
+			cs->env = saved_environment;
+		}
 
 		jump_fixup(cs, cond_to_consequent, consequent);
 		jump_fixup(cs, cond_to_alternative, alternative);
@@ -2082,7 +2126,14 @@ compile(CompilerState *cs, Ast *ast)
 		size_t body = inst_pos(cs);
 		// Drop value from previous iteration (or the initial null)
 		op(cs, OP_DROP);
+		Environment *saved_environment = cs->env;
+		cs->env = env_create(cs->env);
+		bool saved_in_block = cs->in_block;
+		cs->in_block = true;
 		compile(cs, loop->body);
+		cs->in_block = saved_in_block;
+		env_destroy(cs->env);
+		cs->env = saved_environment;
 		jump_to(cs, OP_JUMP, condition);
 
 		jump_fixup(cs, condition_to_body, body);
