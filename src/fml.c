@@ -3065,6 +3065,13 @@ print_help(FILE *file, const char *command)
 
 int
 main(int argc, const char **argv) {
+#ifdef _WIN32
+	// Set standard output mode to "binary" on Windows.
+	// https://nullprogram.com/blog/2021/12/30/
+	int _setmode(int, int);
+	_setmode(1, 0x8000);
+#endif
+
 	Arena arena_;
 	Arena *arena = &arena_;
 	arena_init(arena);
