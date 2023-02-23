@@ -176,7 +176,7 @@ lex_next(Lexer *lexer, Token *token)
 		u8 c = *lexer->pos;
 		switch (state) {
 		case LS_START: switch (c) {
-			case ' ': case '\t': case '\n': start += 1; break;
+			case ' ': case '\t': case '\n': case '\r': start += 1; break;
 			case ALPHA: state = LS_IDENTIFIER; break;
 			case DIGIT: state = LS_NUMBER; break;
 			case '"': state = LS_STRING; start += 1; break;
@@ -222,6 +222,7 @@ lex_next(Lexer *lexer, Token *token)
 			default: tok = TK_SLASH; goto prev_done;
 		} break;
 		case LS_LINE_COMMENT: switch (c) {
+			// Also works with CR LF
 			case '\n': state = LS_START; start = lexer->pos + 1; break;
 		} break;
 		case LS_BLOCK_COMMENT: switch (c) {
@@ -838,6 +839,7 @@ parser_error_cb(void *user_data, const u8 *err_pos, const char *msg, va_list ap)
 	size_t line = 0;
 	const u8 *pos = src->str;
 	for (; pos < err_pos; pos++) {
+		// Also works with CR LF
 		if (*pos == '\n') {
 			line_start = pos + 1;
 			line++;
