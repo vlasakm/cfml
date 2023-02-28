@@ -1160,6 +1160,8 @@ read_u8(u8 **src)
 	return *(*src)++;
 }
 
+//                    F,    M,    L,   \n
+u8 FML_MAGIC[] = { 0x46, 0x4D, 0x4C, 0x0A };
 
 typedef enum {
 	CK_NULL = 0x01,
@@ -1307,9 +1309,14 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 static bool
 read_program(ErrorContext *ec, Arena *arena, Program *program, u8 *input, size_t input_len)
 {
-	if (input_len < 6) {
-		bc_error(ec, "The bytecode is too small (%zu bytes, need at least 6)", input_len);
+	size_t min_len = sizeof(FML_MAGIC) + 6;
+	if (input_len < min_len) {
+		bc_error(ec, "The bytecode is too small (%zu bytes, need at least %zu)", input_len, min_len);
 	}
+	if (memcmp(input, FML_MAGIC, sizeof(FML_MAGIC)) != 0) {
+		bc_error(ec, "FML bytecode magic header not found");
+	}
+	input += sizeof(FML_MAGIC);
 	program->constant_cnt = read_u16(&input);
 	program->constants = arena_alloc(arena, program->constant_cnt * sizeof(*program->constants));
 	for (size_t i = 0; i < program->constant_cnt; i++) {
@@ -2268,6 +2275,7 @@ write_constant(FILE *f, Constant *constant)
 void
 write_program(Program *program, FILE *f)
 {
+	fwrite(FML_MAGIC, sizeof(FML_MAGIC), 1, f);
 	write_u16(f, program->constant_cnt);
 	for (size_t i = 0; i < program->constant_cnt; i++) {
 		write_constant(f, &program->constants[i]);
