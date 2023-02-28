@@ -2930,6 +2930,9 @@ cmd_bc_compile(ErrorContext *ec, Arena *arena, int argc, const char **argv)
 	compile_ast(ec, arena, &program, ast);
 	write_program(&program, stdout);
 	fflush(stdout);
+	if (ferror(stdout)) {
+		argument_error(ec, "Failed to write bytecode to stdout");
+	}
 }
 
 static const char cmd_bc_interpret_help[] = \
