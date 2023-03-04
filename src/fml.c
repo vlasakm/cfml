@@ -231,7 +231,7 @@ heap_log(Heap *heap, const char *event)
 		return;
 	}
 	struct timespec ts;
-	if (timespec_get(&ts, TIME_UTC) != TIME_UTC) {
+	if (!time_get(&ts)) {
 		exec_error(heap->ec, "Failed to get time");
 	}
 	long long sec = ts.tv_sec;

@@ -24,6 +24,18 @@ int str_cmp(Str a, Str b)
 	return cmp == 0 ? (a.len > b.len) - (b.len > a.len) : cmp;
 }
 
+
+bool
+time_get(struct timespec *ts)
+{
+#if defined(_WIN32) && defined(__MINGW32__)
+	return clock_gettime(CLOCK_REALTIME, ts) == 0;
+#else
+	return timespec_get(ts, TIME_UTC) == TIME_UTC;
+#endif
+}
+
+
 typedef struct {
 	const u8 *pos;
 	const u8 *end;

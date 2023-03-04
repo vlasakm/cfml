@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stdalign.h>
 #include <string.h>
+#include <time.h>
 
 #include "arena.h"
 
@@ -45,6 +46,8 @@ bool str_eq(Str a, Str b);
 //  - a positive number if the first string is greater than the second
 int str_cmp(Str a, Str b);
 
+// Get current time and save it into `ts`.
+bool time_get(struct timespec *ts);
 
 // See https://courses.fit.cvut.cz/NI-RUN/specs/ast.html for details about the
 // AST.
