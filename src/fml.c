@@ -2594,8 +2594,8 @@ write_ast_field_string_array(OutputState *os, char *name, Str *strings, size_t s
 			fprintf(os->f, ",\n");
 		}
 		indent -= 4;
+		fprintf(os->f, "%*s},\n", indent, "");
 	}
-	fprintf(os->f, "%*s},\n", indent, "");
 	fprintf(os->f, "%*s.%s_cnt = %zu,\n", indent, "", name, string_cnt);
 }
 
