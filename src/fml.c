@@ -1309,6 +1309,7 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 static bool
 read_program(ErrorContext *ec, Arena *arena, Program *program, u8 *input, size_t input_len)
 {
+	u8 *input_start = input;
 	size_t min_len = sizeof(FML_MAGIC) + 6;
 	if (input_len < min_len) {
 		bc_error(ec, "The bytecode is too small (%zu bytes, need at least %zu)", input_len, min_len);
@@ -1324,6 +1325,9 @@ read_program(ErrorContext *ec, Arena *arena, Program *program, u8 *input, size_t
 	}
 	read_class(&input, &program->global_class);
 	program->entry_point = read_u16(&input);
+	if (input != input_start + input_len) {
+		bc_error(ec, "Trailing bytes left after parsing bytecode");
+	}
 	return true;
 }
 
