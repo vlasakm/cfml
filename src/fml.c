@@ -634,7 +634,7 @@ value_call_primitive_method(ErrorContext *ec, Heap *heap, Value target, Str meth
 	const u8 *method_name = method.str;
 	size_t method_name_len = method.len;
 	#define METHOD(name) \
-			if (sizeof(name) - 1 == method_name_len && memcmp(name, method_name, method_name_len) == 0) /* body*/
+			if (sizeof(name) - 1 == method_name_len && memcmp(name, method_name, method_name_len) == 0) /* body */
 
 	METHOD("==") {
 		if (argument_cnt != 1) goto err;
