@@ -1211,7 +1211,7 @@ typedef struct {
 		i32 integer;
 		Str string;
 		u16 slot;
-		CFunction method;
+		CFunction function;
 		Class class;
 	};
 } Constant;
@@ -1257,7 +1257,6 @@ constant_eq(Constant *a, Constant *b)
 		return a->integer == b->integer;
 	case CK_STRING:
 		return str_eq(a->string, b->string);
-		break;
 	case CK_FUNCTION:
 		return false;
 	case CK_CLASS:
@@ -1291,11 +1290,11 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 		*input += constant->string.len;
 		break;
 	case CK_FUNCTION:
-		constant->method.parameter_cnt = read_u8(input);
-		constant->method.local_cnt = read_u16(input);
-		constant->method.instruction_len = read_u32(input);
-		constant->method.instruction_start = *input;
-		*input += constant->method.instruction_len;
+		constant->function.parameter_cnt = read_u8(input);
+		constant->function.local_cnt = read_u16(input);
+		constant->function.instruction_len = read_u32(input);
+		constant->function.instruction_start = *input;
+		*input += constant->function.instruction_len;
 		break;
 	case CK_CLASS: {
 		read_class(input, &constant->class);
@@ -1425,16 +1424,16 @@ vm_instantiate_class(VM *vm, Class *class, Value (*make_value)(VM *vm))
 }
 
 static void
-vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
+vm_call_method(VM *vm, u16 function_index, u8 argument_cnt)
 {
-	Constant *method_constant = &vm->program->constants[method_index];
-	assert(method_constant->kind == CK_FUNCTION);
-	CFunction *method = &method_constant->method;
-	if (argument_cnt != method->parameter_cnt) {
-		exec_error(vm->ec, "Wrong number of arguments: %zu expected, got %zu", method->parameter_cnt, argument_cnt);
+	Constant *function_constant = &vm->program->constants[function_index];
+	assert(function_constant->kind == CK_FUNCTION);
+	CFunction *function = &function_constant->function;
+	if (argument_cnt != function->parameter_cnt) {
+		exec_error(vm->ec, "Wrong number of arguments: %zu expected, got %zu", function->parameter_cnt, argument_cnt);
 	}
 
-	size_t local_cnt = argument_cnt + method->local_cnt;
+	size_t local_cnt = argument_cnt + function->local_cnt;
 	size_t saved_bp = vm->bp;
 	vm->bp = vm->frame_stack_pos;
 	vm->frame_stack_pos += local_cnt;
@@ -1453,7 +1452,7 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 		locals[i] = make_null(&vm->heap);
 	}
 
-	for (u8 *ip = method->instruction_start;;) {
+	for (u8 *ip = function->instruction_start;;) {
 		switch (read_u8(&ip)) {
 		case OP_CONSTANT: {
 			u16 constant_index = read_u16(&ip);
@@ -1555,20 +1554,20 @@ vm_call_method(VM *vm, u16 method_index, u8 argument_cnt)
 			if (!value_is_function(*function)) {
 				exec_error(vm->ec, "Function call target is not a function");
 			}
-			u16 method_index = value_as_function_bc(*function);
+			u16 function_index = value_as_function_bc(*function);
 			// Receiver (this) is null for functions
 			*function = make_null(&vm->heap);
-			vm_call_method(vm, method_index, argument_cnt + 1);
+			vm_call_method(vm, function_index, argument_cnt + 1);
 			break;
 		}
 		case OP_CALL_METHOD: {
 			Str name = constant_string(vm, &ip);
 			u8 argument_cnt = read_u8(&ip);
 			Value *lobject = vm_peek_n(vm, argument_cnt);
-			Value *method_value = value_method_try(vm->ec, *lobject, lobject, name);
-			if (method_value) {
-				u16 method_index = value_as_function_bc(*method_value);
-				vm_call_method(vm, method_index, argument_cnt);
+			Value *function_value = value_method_try(vm->ec, *lobject, lobject, name);
+			if (function_value) {
+				u16 function_index = value_as_function_bc(*function_value);
+				vm_call_method(vm, function_index, argument_cnt);
 			} else {
 				Value *arguments = vm_peek_n(vm, argument_cnt - 1);
 				Value return_value = value_call_primitive_method(vm->ec, &vm->heap, *lobject, name, arguments, argument_cnt - 1);
@@ -1952,7 +1951,7 @@ compile(CompilerState *cs, Ast *ast)
 		u8 *instruction_start = move_to_arena(cs->arena, &cs->instructions, start, u8);
 		literal(cs, (Constant) {
 		       .kind = CK_FUNCTION,
-		       .method = (CFunction) {
+		       .function = (CFunction) {
 				.local_cnt = cs->local_cnt - function->parameter_cnt - 1,
 				.parameter_cnt = function->parameter_cnt + 1,
 				.instruction_start = instruction_start,
@@ -2177,7 +2176,7 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	u8 *instruction_start = move_to_arena(cs.arena, &cs.instructions, start, u8);
 	u16 entry_point = add_constant(&cs, (Constant) {
 	       .kind = CK_FUNCTION,
-	       .method = (CFunction) {
+	       .function = (CFunction) {
 			.local_cnt = cs.local_cnt - 1,
 			.parameter_cnt = 1,
 			.instruction_start = instruction_start,
@@ -2262,10 +2261,10 @@ write_constant(FILE *f, Constant *constant)
 		fwrite(constant->string.str, constant->string.len, 1, f);
 		break;
 	case CK_FUNCTION:
-		write_u8(f, constant->method.parameter_cnt);
-		write_u16(f, constant->method.local_cnt);
-		write_u32(f, constant->method.instruction_len);
-		fwrite(constant->method.instruction_start, constant->method.instruction_len, 1, f);
+		write_u8(f, constant->function.parameter_cnt);
+		write_u16(f, constant->function.local_cnt);
+		write_u32(f, constant->function.instruction_len);
+		fwrite(constant->function.instruction_start, constant->function.instruction_len, 1, f);
 		break;
 	case CK_CLASS: {
 		write_class(f, &constant->class);
@@ -2640,9 +2639,9 @@ print_constant(Program *program, u16 constant_index, FILE *f, bool raw)
 		fprintf(f, "\"%.*s\"", (int) constant->string.len, constant->string.str);
 		break;
 	case CK_FUNCTION: {
-		CFunction *method = &constant->method;
-		fprintf(f, "Function(params: %"PRIi8", locals: %"PRIi8", length: %zu)\n", method->parameter_cnt, method->local_cnt, method->instruction_len);
-		u8 *start = method->instruction_start;
+		CFunction *function = &constant->function;
+		fprintf(f, "Function(params: %"PRIi8", locals: %"PRIi8", length: %zu)\n", function->parameter_cnt, function->local_cnt, function->instruction_len);
+		u8 *start = function->instruction_start;
 		for (u8 *ip = start;;) {
 			fprintf(f, "%18zu: ", ip - start);
 			switch (read_u8(&ip)) {
