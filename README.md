@@ -96,6 +96,7 @@ SUBCOMMANDS:
     bc_interpret      Interpret bytecode
     bc_disassemble    Disassemble bytecode
     bc_dump           Compile program and print disassembly
+    bc_verify         Statically verify some bytecode properties
     ast_interpret     Run a program with AST interpreter
     parse             Parse a source file and print it as AST
     help              Get help about fml or subcommand
@@ -256,6 +257,35 @@ Constant Pool:
                 21: return
 Entry: #5
 Globals: #3="a"
+```
+
+### `bc_verify`
+
+Take a bytecode file as an argument, and check statically some properties of
+the bytecode.
+
+```
+fml-bc_verify
+Statically verify some bytecode properties
+
+Verify:
+ - correct constant kinds are used,
+ - jump targets being starts of instructions,
+ - operand stack heights being consistent across control flow,
+ - used global variable names,
+ - and maybe other things.
+
+USAGE:
+    fml bc_verify FILE
+
+ARGS:
+    FILE    The bytecode file to verify
+```
+
+Example:
+
+```
+$ builddir/fml bc_verify example.bc
 ```
 
 ### `ast_interpret`

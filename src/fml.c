@@ -1197,10 +1197,44 @@ typedef enum {
 } OpCode;
 
 typedef struct {
+	int length;
+	int pop;
+	int push;
+} OpDesc;
+
+static OpDesc op_desc[] = {
+	[OP_CONSTANT]      = { 3,  0, 1 },
+	[OP_ARRAY]         = { 1,  2, 1 },
+	[OP_OBJECT]        = { 3, -1, 1 },
+	[OP_GET_LOCAL]     = { 3,  0, 1 },
+	[OP_SET_LOCAL]     = { 3,  1, 1 },
+	[OP_GET_GLOBAL]    = { 3,  0, 1 },
+	[OP_SET_GLOBAL]    = { 3,  1, 1 },
+	[OP_GET_FIELD]     = { 3,  1, 1 },
+	[OP_SET_FIELD]     = { 3,  2, 1 },
+	[OP_JUMP]          = { 3,  0, 0 },
+	[OP_BRANCH]        = { 3,  1, 0 },
+	[OP_CALL_FUNCTION] = { 2, -1, 1 },
+	[OP_CALL_METHOD]   = { 4, -1, 1 },
+	[OP_PRINT]         = { 4, -1, 1 },
+	[OP_DROP]          = { 1,  1, 0 },
+	[OP_RETURN]        = { 1,  1, 1 },
+};
+
+typedef struct {
+	OpCode op;
+	union {
+		u32 jump_dest;
+		struct { u16 index; u8 arg_cnt; };
+	};
+} Instruction;
+
+typedef struct {
 	u16 local_cnt;
 	u8 parameter_cnt;
 	u8 *instruction_start;
 	size_t instruction_len;
+	size_t max_ostack_height;
 } CFunction;
 
 typedef struct {
@@ -1236,6 +1270,397 @@ bc_error(ErrorContext *ec, const char *msg, ...)
 	verror(ec, NULL, "bytecode", true, msg, ap);
 	va_end(ap);
 }
+
+typedef struct {
+	ErrorContext *ec;
+	Arena *arena;
+	Program *program;
+} VerificationState;
+
+static void
+verify_constant_kind(VerificationState *vs, u16 constant_index, ConstantKind expected_kind)
+{
+	u16 actual_kind = vs->program->constants[constant_index].kind;
+	if (vs->program->constants[constant_index].kind != expected_kind) {
+		bc_error(vs->ec, "Expected constant '%"PRIu16"' to be %d, but it is %d", constant_index, expected_kind, actual_kind);
+	}
+}
+
+static int
+cmp_u32(const void *a_, const void *b_)
+{
+	const u32 *a = a_;
+	const u32 *b = b_;
+	return (*a > *b) - (*b > *a);
+}
+
+static void
+update_height(VerificationState *vs, CFunction *function, u8 *height, u8 pop, u8 push)
+{
+	if (pop > *height) {
+		bc_error(vs->ec, "Operand stack underflow detected");
+	}
+	*height -= pop;
+	if (push > (UINT8_MAX - 1) - *height) {
+		bc_error(vs->ec, "Operand stack overflow detected (only %d elements supported per function call)", UINT8_MAX - 1);
+	}
+	*height += push;
+	if (*height > function->max_ostack_height) {
+		function->max_ostack_height = *height;
+	}
+}
+
+static void
+verify_function(VerificationState *vs, CFunction *function)
+{
+	size_t arena_pos = arena_save(vs->arena);
+	Program *program = vs->program;
+	size_t local_cnt = function->parameter_cnt + function->local_cnt;
+	size_t instruction_len = function->instruction_len;
+	u8 *start = arena_alloc(vs->arena, instruction_len);
+	memcpy(start, function->instruction_start, instruction_len);
+	u8  *end = start + instruction_len;
+
+	Instruction *insts = arena_alloc(vs->arena, instruction_len * sizeof(insts[0]));
+	u32 *instruction_starts = arena_alloc(vs->arena, (instruction_len + 1) * sizeof(instruction_starts[0]));
+
+	// Pass 1: Calculate the number of instructions as well as their
+	// positions in the bytecode. Also verify some immediate arguments to
+	// constants - i.e. that indices into local frame and correct kinds of
+	// constants are used. Jump offsets will be verified later.
+	size_t instruction_cnt = 0;
+	for (u8 *ip = start; ip < end; instruction_cnt++) {
+		Instruction *inst = &insts[instruction_cnt];
+		instruction_starts[instruction_cnt] = ip - start;
+		switch (inst->op = read_u8(&ip)) {
+		case OP_CONSTANT: {
+			inst->index = read_u16(&ip);
+			Constant *constant = &program->constants[inst->index];
+			switch (constant->kind) {
+			case CK_NULL:
+			case CK_BOOLEAN:
+			case CK_INTEGER:
+			case CK_FUNCTION:
+				break;
+			default:
+				bc_error(vs->ec, "Expected constant '%"PRIu16"' (an argument to the constant instruction) to be null, boolean, integer or function, but it is %d", inst->index, constant->kind);
+			}
+			break;
+		}
+		case OP_ARRAY:
+			break;
+		case OP_OBJECT: {
+			inst->index = read_u16(&ip);
+			verify_constant_kind(vs, inst->index, CK_CLASS);
+			break;
+		}
+		case OP_GET_LOCAL:
+		case OP_SET_LOCAL: {
+			inst->index = read_u16(&ip);
+			if (inst->index >= local_cnt) {
+				bc_error(vs->ec, "Local index '%"PRIu16"' out of bounds (function has %zu locals)", inst->index, local_cnt);
+			}
+			break;
+		}
+		case OP_GET_GLOBAL:
+		case OP_SET_GLOBAL: {
+			inst->index = read_u16(&ip);
+			verify_constant_kind(vs, inst->index, CK_STRING);
+			Str name = program->constants[inst->index].string;
+			u8 *globals = program->global_class.members;
+			size_t global_cnt = program->global_class.member_cnt;
+			for (size_t i = 0; i < global_cnt; i++) {
+				u16 global_name_index = read_u16(&globals);
+				Str global_name = program->constants[global_name_index].string;
+				if (str_eq(name, global_name)) {
+					goto found;
+				}
+			}
+			bc_error(vs->ec, "Set/get of a global which is not in globals: '%.*s'", (int) name.len, name.str);
+			found:
+			break;
+		}
+		case OP_GET_FIELD:
+		case OP_SET_FIELD: {
+			inst->index = read_u16(&ip);
+			verify_constant_kind(vs, inst->index, CK_STRING);
+			break;
+		}
+		case OP_JUMP:
+		case OP_BRANCH: {
+			i16 offset = (i16) read_u16(&ip);
+			inst->jump_dest = (ip - start) + offset;
+			// rough check for _really_ out of bounds
+			if (ip + offset >= end) {
+				bc_error(vs->ec, "Jump out of bounds (destination '%zu', bytecode length '%zu')", (size_t) inst->jump_dest, instruction_len);
+			}
+			break;
+		}
+		case OP_CALL_FUNCTION: {
+			inst->arg_cnt = read_u8(&ip);
+			break;
+		}
+		case OP_CALL_METHOD:
+		case OP_PRINT: {
+			inst->index = read_u16(&ip);
+			inst->arg_cnt = read_u8(&ip);
+			verify_constant_kind(vs, inst->index, CK_STRING);
+			break;
+		}
+		case OP_DROP:
+		case OP_RETURN:
+			break;
+		default: {
+			bc_error(vs->ec, "Unknown opcode 0x%02zx", (size_t) ip[-1]);
+		}
+		}
+	}
+	instruction_starts[instruction_cnt] = instruction_len;
+
+	// Check that the bytecode ends with unconditional control flow change.
+	// Otherwise we could get out of bounds while interpreting the bytecode.
+	switch (insts[instruction_cnt - 1].op) {
+	case OP_JUMP:
+	case OP_RETURN:
+		break;
+	default:
+		bc_error(vs->ec, "Bytecode doesn't end with return or jump");
+
+	}
+
+	size_t instruction_cnt_max = UINT16_MAX;
+	if (instruction_cnt > instruction_cnt_max) {
+		bc_error(vs->ec, "Validator currently supports only %zu instructions, but have %zu", instruction_cnt_max, instruction_cnt);
+	}
+
+
+	// Pass 2: Update jump destinations and collect all basic block starts.
+	GArena gblock_starts;
+	garena_init(&gblock_starts);
+	// first basic block starts at instruction 0
+	garena_push_value(&gblock_starts, u32, 0);
+	for (size_t i = 0; i < instruction_cnt; i++) {
+		Instruction *inst = &insts[i];
+		switch (insts[i].op) {
+		case OP_JUMP:
+		case OP_BRANCH: {
+			u32 dest = inst->jump_dest;
+			u32 pos = 0;
+			// we have a sentinal at:
+			//     instruction_starts[instruction_cnt]
+			// and also already guaranteed that all jump destinations
+			// do not go beyond that sentinel
+			while (instruction_starts[pos] < dest) {
+				pos++;
+			}
+			if (instruction_starts[pos] != dest) {
+				bc_error(vs->ec, "Jump destination is not a start of instruction (destination '%zu', instruction at '%zu')", (size_t) dest, (size_t) instruction_starts[pos]);
+			}
+			// write absolute destination in instruction counts
+			insts->jump_dest = pos;
+			// the jump destination starts a new basic block
+			garena_push_value(&gblock_starts, u32, pos);
+			// since this instruction is a jump/branch then the next
+			// instruction (if any) starts a new basic block
+			if (i < instruction_cnt - 1) {
+				garena_push_value(&gblock_starts, u32, i + 1);
+			}
+			break;
+		case OP_RETURN:
+			// the next instruction (if any) starts a new basic
+			// block
+			if (i < instruction_cnt - 1) {
+				garena_push_value(&gblock_starts, u32, i + 1);
+			}
+			break;
+		default:
+			break;
+		}
+		}
+	}
+	// a dummy "one past end" instruction start
+	garena_push_value(&gblock_starts, u32, instruction_cnt);
+
+	// Deduplicate and sort block starts.
+	u32 *block_starts = garena_array(&gblock_starts, u32);
+	size_t block_start_cnt = garena_cnt(&gblock_starts, u32);
+	qsort(block_starts, block_start_cnt, sizeof(u32), cmp_u32);
+	u32 *read = block_starts;
+	u32 *write = block_starts;
+	while (read < block_starts + block_start_cnt) {
+		if (*read != *write) {
+			write += 1;
+			*write = *read;
+		}
+		read += 1;
+	}
+	size_t block_cnt = write - block_starts;
+
+	// Construct Control Flow Graph as an array of edges.
+	typedef struct { u32 from; u32 to; } Edge;
+	u8 *prev_stack_heights_out = arena_alloc(vs->arena, block_cnt * sizeof(prev_stack_heights_out[0]));
+	u8 *stack_heights_out = arena_alloc(vs->arena, block_cnt * sizeof(stack_heights_out[0]));
+	GArena gcfg;
+	garena_init(&gcfg);
+	for (size_t i = 0; i < block_cnt; i++) {
+		prev_stack_heights_out[i] = UINT8_MAX;
+		stack_heights_out[i] = 0;
+		Instruction *inst = &insts[block_starts[i + 1] - 1];
+		switch (inst->op) {
+		case OP_JUMP:
+		case OP_BRANCH: {
+			u32 dest = inst->jump_dest;
+			size_t pos = 0;
+			while (instruction_starts[block_starts[pos]] < dest) {
+				pos++;
+			}
+			garena_push_value(&gcfg, Edge, ((Edge) { .from = i, .to = pos }));
+			break;
+		default:
+			break;
+		}
+		}
+		if (inst->op != OP_JUMP) {
+			garena_push_value(&gcfg, Edge, ((Edge) { .from = i, .to = i + 1 }));
+		}
+	}
+	Edge *edges = garena_array(&gcfg, Edge);
+	size_t edge_cnt = garena_cnt(&gcfg, Edge);
+
+	// Check that for each instruction the operand stack height is the same
+	// across all possible control flows using iterative data flow analysis.
+	//
+	// While the current iteration doesn't equal the previous iteration for
+	// each basic block start, join the stack heights from all predecessors
+	// and simulate stack height for all basic block instructions, checking
+	// that we don't underflow or overflow the operand stack (the
+	// verification supports only operand stack heights up to 254 for each
+	// call frame).
+	//
+	// `UINT8_MAX` is our bottom (i.e. we don't know anything),
+	// while other values represent concrete stack heights. If we find
+	// concrete but different stack heights among predecessors, we can fail
+	// immediately.
+	//
+	// We only actually start simulating a block if any predecessor has
+	// concrete stack height. Since we also don't iterate over the blocks in
+	// sensible order (i.e. reverse preorder) and don't use any worklist
+	// this is necessarily very inefficient. At least we use basic blocks.
+	function->max_ostack_height = 0;
+	while (memcmp(prev_stack_heights_out, stack_heights_out, block_cnt * sizeof(stack_heights_out[0])) != 0) {
+		for (size_t b = 0; b < block_cnt; b++) {
+			// The entry block has initial stack height of 0. This
+			// is how we get going.
+			u8 height_in = b == 0 ? 0 : UINT8_MAX;
+			// We don't store incomign stack height for each block,
+			// instead we get it by joining stack heights from
+			// predecessors on each iteration.
+			for (size_t e = 0; e < edge_cnt; e++) {
+				if (edges[e].to != b) {
+					continue;
+				}
+				u8 out = prev_stack_heights_out[edges[e].from];
+				if (out == UINT8_MAX) {
+					continue;
+				} else if (height_in == UINT8_MAX) {
+					height_in = out;
+				} else if (out != height_in) {
+					bc_error(vs->ec, "Inconsistent stack height (%"PRIu8" vs %"PRIu8")", out, height_in);
+				}
+			}
+			if (height_in == UINT8_MAX) {
+				stack_heights_out[b] = UINT8_MAX;
+				continue;
+			}
+			u8 height = height_in;
+			size_t block_start = block_starts[b];
+			size_t block_end = block_starts[b + 1];
+			for (size_t i = block_start; i < block_end; i++) {
+				Instruction *inst = &insts[i];
+				switch (inst->op) {
+				case OP_OBJECT: {
+					Constant *constant = &program->constants[inst->index];
+					Class *class = &constant->class;
+					update_height(vs, function, &height, 1 + class->member_cnt, 1);
+					break;
+				}
+				case OP_CALL_FUNCTION: {
+					update_height(vs, function, &height, inst->arg_cnt + 1, 1);
+					break;
+				}
+				case OP_CALL_METHOD:
+				case OP_PRINT: {
+					update_height(vs, function, &height, inst->arg_cnt, 1);
+					break;
+				}
+				default: {
+					OpDesc *desc = &op_desc[inst->op];
+					update_height(vs, function, &height, desc->pop, desc->push);
+					break;
+				}
+				}
+			}
+			stack_heights_out[b] = height;
+		}
+		u8 *tmp = stack_heights_out;
+		stack_heights_out = prev_stack_heights_out;
+		prev_stack_heights_out = tmp;
+	}
+
+	// All functions have to push at least the return value.
+	if (function->max_ostack_height == 0) {
+		bc_error(vs->ec, "Function doesn't push anything to the operand stack");
+	}
+
+	// Sanity check, there shouldn't be a bottom by now.
+	for (size_t i = 0; i < block_cnt; i++) {
+		assert(stack_heights_out[i] != UINT8_MAX);
+	}
+
+	garena_destroy(&gblock_starts);
+	garena_destroy(&gcfg);
+	arena_restore(vs->arena, arena_pos);
+}
+
+static void
+verify_class(VerificationState *vs, Class *class)
+{
+	u8 *members = class->members;
+	for (size_t i = 0; i < class->member_cnt; i++) {
+		u16 member_name_index = read_u16(&members);
+		verify_constant_kind(vs, member_name_index, CK_STRING);
+	}
+}
+
+static void
+verify_program(ErrorContext *ec, Arena *arena, Program *program)
+{
+	VerificationState vs_ = {
+		.ec = ec,
+		.arena = arena,
+		.program = program,
+	};
+	VerificationState *vs = &vs_;
+	verify_class(vs, &program->global_class);
+	verify_constant_kind(vs, program->entry_point, CK_FUNCTION);
+	for (u16 i = 0; i < program->constant_cnt; i++) {
+		Constant *constant = &program->constants[i];
+		switch (constant->kind) {
+		case CK_NULL:
+		case CK_BOOLEAN:
+		case CK_INTEGER:
+		case CK_STRING:
+			break;
+		case CK_FUNCTION:
+			verify_function(vs, &constant->function);
+			break;
+		case CK_CLASS:
+			verify_class(vs, &constant->class);
+			break;
+		}
+	}
+}
+
 
 static void
 read_class(u8 **input, Class *class)
@@ -1348,6 +1773,10 @@ typedef struct {
 	size_t frame_stack_pos;
 	size_t frame_stack_len;
 	size_t bp;
+
+	// For verification sanity check.
+	size_t fun_stack_start;
+	CFunction *function;
 } VM;
 
 
@@ -1395,6 +1824,10 @@ vm_push(VM *vm, Value value)
 {
 	if (vm->stack_pos + 1 >= vm->stack_len) {
 		exec_error(vm->ec, "Operand stack space exhausted");
+	}
+	if (vm->function && vm->function->max_ostack_height) {
+		// Verification sanity check.
+		assert(vm->stack_pos + 1 - vm->fun_stack_start <= vm->function->max_ostack_height);
 	}
 	vm->stack[++vm->stack_pos] = value;
 }
@@ -1456,6 +1889,12 @@ vm_call_method(VM *vm, u16 function_index, u8 argument_cnt)
 	for (size_t i = argument_cnt; i < local_cnt; i++) {
 		locals[i] = make_null(&vm->heap);
 	}
+
+	// This part is here mainly for sanity checking the verification.
+	size_t saved_fun_stack_start = vm->fun_stack_start;
+	CFunction *saved_function = vm->function;
+	vm->fun_stack_start = vm->stack_pos;
+	vm->function = function;
 
 	for (u8 *ip = function->instruction_start;;) {
 		switch (read_u8(&ip)) {
@@ -1597,6 +2036,10 @@ vm_call_method(VM *vm, u16 function_index, u8 argument_cnt)
 		case OP_RETURN: {
 			vm->frame_stack_pos = vm->bp;
 			vm->bp = saved_bp;
+
+			// For verification sanity check.
+			vm->fun_stack_start = saved_fun_stack_start;
+			vm->function = saved_function;
 			return;
 		}
 		}
@@ -1613,6 +2056,7 @@ gc_vm(Heap *heap)
 static void
 vm_run(ErrorContext *ec, Arena *arena, Program *program, size_t heap_size, FILE *heap_log)
 {
+	verify_program(ec, arena, program);
 	VM *vm = arena_alloc(arena, sizeof(*vm));
 	*vm = (VM) {
 		.ec = ec,
@@ -2204,6 +2648,8 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	garena_destroy(&cs.constants);
 	garena_destroy(&cs.instructions);
 	garena_destroy(&cs.globals);
+
+	verify_program(ec, arena, program);
 
 	if (cs.had_error) {
 		arena_restore(arena, arena_start);
@@ -3009,6 +3455,33 @@ cmd_bc_dump(ErrorContext *ec, Arena *arena, int argc, const char **argv)
 	disassemble(&program, stdout);
 }
 
+static const char cmd_bc_verify_help[] = \
+	"Verify:\n"
+	" - correct constant kinds are used,\n"
+	" - jump targets being starts of instructions,\n"
+	" - operand stack heights being consistent across control flow,\n"
+	" - used global variable names,\n"
+	" - and maybe other things.\n"
+	"\n"
+	"USAGE:\n"
+	"    fml bc_verify FILE\n"
+	"\n"
+	"ARGS:\n"
+	"    FILE    The bytecode file to verify\n"
+;
+
+static void
+cmd_bc_verify(ErrorContext *ec, Arena *arena, int argc, const char **argv)
+{
+	if (argc != 1) {
+		argument_error(ec, "Expected FILE as a single argument\n");
+	}
+	Str source = read_file(ec, arena, argv[0]);
+	Program program;
+	read_program(ec, arena, &program, (u8 *) source.str, source.len);
+	verify_program(ec, arena, &program);
+}
+
 static const char cmd_help_help[] = \
 	"USAGE:\n"
 	"    fml help [COMMAND]\n"
@@ -3046,6 +3519,7 @@ static struct {
 	CMD(bc_interpret, "Interpret bytecode")
 	CMD(bc_disassemble, "Disassemble bytecode")
 	CMD(bc_dump, "Compile program and print disassembly")
+	CMD(bc_verify, "Statically verify some bytecode properties")
 	CMD(ast_interpret, "Run a program with AST interpreter")
 	CMD(parse, "Parse a source file and print it as AST")
 	CMD(help, "Get help about fml or subcommand")
