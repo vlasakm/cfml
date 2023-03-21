@@ -25,7 +25,7 @@
 	((type *) garena_from((arena), (start), alignof(type)))
 
 #define container_of(member_ptr, type, member) \
-	((type *) ((u8 *)(member_ptr) - offsetof(type, member)))
+	((type *) ((u8 *)(1 ? (member_ptr) : &((type *) 0)->member) - offsetof(type, member)))
 
 
 #define UNREACHABLE() unreachable(__FILE__, __LINE__)
