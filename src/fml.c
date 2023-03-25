@@ -1625,7 +1625,7 @@ vm_run(ErrorContext *ec, Arena *arena, Program *program, size_t heap_size, FILE 
 	heap_init(&vm->heap, ec, gc_vm, heap_size, heap_log);
 	vm->global = vm_instantiate_class(vm, &program->global_class, make_null_vm);
 	// push `this` as an argument
-	vm->stack[++vm->stack_pos] = make_null(&vm->heap);
+	vm_push(vm, make_null(&vm->heap));
 	vm_call_method(vm, program->entry_point, 1);
 	// Check that the program left exactly one value on the stack
 	assert(vm->stack_pos == 0);
@@ -1731,6 +1731,23 @@ literal(CompilerState *cs, Constant constant)
 {
 	inst_write_u8(cs, OP_CONSTANT);
 	inst_constant(cs, constant);
+}
+
+static u16
+add_function(CompilerState *cs, size_t start, u16 parameter_cnt)
+{
+	parameter_cnt += 1; // for 'this'
+	size_t instruction_len = garena_cnt_from(&cs->instructions, start, u8);
+	u8 *instruction_start = move_to_arena(cs->arena, &cs->instructions, start, u8);
+	return add_constant(cs, (Constant) {
+	       .kind = CK_FUNCTION,
+	       .function = (CFunction) {
+			.local_cnt = cs->local_cnt - parameter_cnt,
+			.parameter_cnt = parameter_cnt,
+			.instruction_start = instruction_start,
+			.instruction_len = instruction_len,
+		},
+	});
 }
 
 static void
@@ -1947,17 +1964,8 @@ compile(CompilerState *cs, Ast *ast)
 		op(cs, OP_RETURN);
 		env_pop(&cs->env);
 
-		size_t instruction_len = garena_cnt_from(&cs->instructions, start, u8);
-		u8 *instruction_start = move_to_arena(cs->arena, &cs->instructions, start, u8);
-		literal(cs, (Constant) {
-		       .kind = CK_FUNCTION,
-		       .function = (CFunction) {
-				.local_cnt = cs->local_cnt - function->parameter_cnt - 1,
-				.parameter_cnt = function->parameter_cnt + 1,
-				.instruction_start = instruction_start,
-				.instruction_len = instruction_len,
-			},
-		});
+		u16 function_constant = add_function(cs, start, function->parameter_cnt);
+		op_index(cs, OP_CONSTANT, function_constant);
 		cs->env = saved_environment;
 		cs->local_cnt = saved_local_cnt;
 		cs->in_block = saved_in_block;
@@ -2165,24 +2173,13 @@ compile_ast(ErrorContext *ec, Arena *arena, Program *program, Ast *ast)
 	garena_init(&cs.instructions);
 	garena_init(&cs.globals);
 
-	size_t start = garena_save(&cs.instructions);
 	env_push(&cs.env);
 	define_local(&cs, STR("this"));
 	compile(&cs, ast);
 	env_pop(&cs.env);
 	op(&cs, OP_RETURN);
 
-	size_t instruction_len = garena_cnt_from(&cs.instructions, start, u8);
-	u8 *instruction_start = move_to_arena(cs.arena, &cs.instructions, start, u8);
-	u16 entry_point = add_constant(&cs, (Constant) {
-	       .kind = CK_FUNCTION,
-	       .function = (CFunction) {
-			.local_cnt = cs.local_cnt - 1,
-			.parameter_cnt = 1,
-			.instruction_start = instruction_start,
-			.instruction_len = instruction_len,
-		},
-	});
+	u16 entry_point = add_function(&cs, 0, 0);
 
 	program->constant_cnt = garena_cnt(&cs.constants, Constant);
 	program->constants = move_to_arena(cs.arena, &cs.constants, 0, Constant);
