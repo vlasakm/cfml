@@ -27,6 +27,11 @@
 #define container_of(member_ptr, type, member) \
 	((type *) ((u8 *)(1 ? (member_ptr) : &((type *) 0)->member) - offsetof(type, member)))
 
+#ifdef __GNUC__
+#define printf_attr(n) __attribute__((__format__(__printf__, n, n + 1)))
+#else
+#define printf_attr(n)
+#endif
 
 #define UNREACHABLE() unreachable(__FILE__, __LINE__)
 static _Noreturn void
@@ -206,7 +211,7 @@ typedef struct {
 	Ast *ast;
 } Function;
 
-static void
+static void printf_attr(2)
 exec_error(ErrorContext *ec, const char *msg, ...)
 {
 	va_list ap;
@@ -1223,7 +1228,7 @@ typedef struct {
 	u16 entry_point;
 } Program;
 
-static void
+static void printf_attr(2)
 bc_error(ErrorContext *ec, const char *msg, ...)
 {
 	va_list ap;
@@ -1643,7 +1648,7 @@ typedef struct {
 	bool had_error;
 } CompilerState;
 
-static void
+static void printf_attr(2)
 compile_error(CompilerState *cs, const char *msg, ...)
 {
 	va_list ap;
@@ -2772,7 +2777,7 @@ disassemble(Program *program, FILE *f)
 	fprintf(f, "\n");
 }
 
-static void
+static void printf_attr(2)
 argument_error(ErrorContext *ec, const char *msg, ...)
 {
 	va_list ap;
