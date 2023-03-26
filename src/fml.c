@@ -1091,11 +1091,11 @@ interpreter_call_method(InterpreterState *is, Value object, bool function_call, 
 		Environment *saved_env = is->env;
 		is->env = is->global_env;
 		env_push(&is->env);
-		for (size_t i = 0; i < argument_cnt; i++) {
-			env_define(is->env, function->parameters[i], arguments[i]);
-		}
 		if (!function_call) {
 			env_define(is->env, STR("this"), object);
+		}
+		for (size_t i = 0; i < argument_cnt; i++) {
+			env_define(is->env, function->parameters[i], arguments[i]);
 		}
 		return_value = interpret(is, function->body);
 		env_pop(&is->env);
