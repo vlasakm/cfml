@@ -729,7 +729,7 @@ value_call_primitive_method(ErrorContext *ec, Heap *heap, Value target, Str meth
 		break;
 	}
 err:
-	exec_error(ec, "Invalid method '%.*s' called on value (invalid types or number of arguments)", method_name_len, method_name);
+	exec_error(ec, "Invalid method '%.*s' called on value (invalid types or number of arguments)", (int) method_name_len, method_name);
 	return make_null(heap);
 }
 
@@ -1435,7 +1435,7 @@ vm_call_method(VM *vm, u16 function_index, u8 argument_cnt)
 	assert(function_constant->kind == CK_FUNCTION);
 	CFunction *function = &function_constant->function;
 	if (argument_cnt != function->parameter_cnt) {
-		exec_error(vm->ec, "Wrong number of arguments: %zu expected, got %zu", function->parameter_cnt, argument_cnt);
+		exec_error(vm->ec, "Wrong number of arguments: %zu expected, got %zu", (size_t) function->parameter_cnt, (size_t) argument_cnt);
 	}
 
 	size_t local_cnt = argument_cnt + function->local_cnt;
