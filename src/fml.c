@@ -46,13 +46,13 @@ unreachable(char *file, size_t line)
 u64
 str_hash(Str id)
 {
-    u64 h = UINT64_C(14695981039346656037);
-    for (size_t i = 0; i < id.len; i++) {
-	// beware of unwanted sign extension!
-        h ^= id.str[i];
-        h *= UINT64_C(1099511628211);
-    }
-    return h;
+	u64 h = UINT64_C(14695981039346656037);
+	for (size_t i = 0; i < id.len; i++) {
+		// beware of unwanted sign extension!
+		h ^= id.str[i];
+		h *= UINT64_C(1099511628211);
+	}
+	return h;
 }
 
 typedef struct Heap Heap;
@@ -1699,8 +1699,8 @@ static u16
 add_string(CompilerState *cs, Str name)
 {
 	return add_constant(cs, (Constant) {
-	       .kind = CK_STRING,
-	       .string = name,
+		.kind = CK_STRING,
+		.string = name,
 	});
 }
 
@@ -1745,8 +1745,8 @@ add_function(CompilerState *cs, size_t start, u16 parameter_cnt)
 	size_t instruction_len = garena_cnt_from(&cs->instructions, start, u8);
 	u8 *instruction_start = move_to_arena(cs->arena, &cs->instructions, start, u8);
 	return add_constant(cs, (Constant) {
-	       .kind = CK_FUNCTION,
-	       .function = (CFunction) {
+		.kind = CK_FUNCTION,
+		.function = (CFunction) {
 			.local_cnt = cs->local_cnt - parameter_cnt,
 			.parameter_cnt = parameter_cnt,
 			.instruction_start = instruction_start,
@@ -1841,16 +1841,16 @@ compile(CompilerState *cs, Ast *ast)
 	case AST_BOOLEAN: {
 		AstBoolean *boolean = (AstBoolean *) ast;
 		literal(cs, (Constant) {
-		       .kind = CK_BOOLEAN,
-		       .boolean = boolean->value,
+			.kind = CK_BOOLEAN,
+			.boolean = boolean->value,
 		});
 		return;
 	}
 	case AST_INTEGER: {
 		AstInteger *integer = (AstInteger *) ast;
 		literal(cs, (Constant) {
-		       .kind = CK_INTEGER,
-		       .integer = integer->value,
+			.kind = CK_INTEGER,
+			.integer = integer->value,
 		});
 		return;
 	}
@@ -2898,10 +2898,10 @@ cmd_run(ErrorContext *ec, Arena *arena, int argc, const char **argv)
 		argument_error(ec, "Expected FILE as a single argument\n");
 	}
 	Str source = read_file(ec, arena, argv[0]);
-        Ast *ast = parse_source(ec, arena, source);
-        Program program;
-        compile_ast(ec, arena, &program, ast);
-        vm_run(ec, arena, &program, heap_size, heap_log);
+	Ast *ast = parse_source(ec, arena, source);
+	Program program;
+	compile_ast(ec, arena, &program, ast);
+	vm_run(ec, arena, &program, heap_size, heap_log);
 }
 
 static const char cmd_ast_interpret_help[] = \
@@ -3035,21 +3035,21 @@ cmd_help(ErrorContext *ec, Arena *arena, int argc, const char **argv)
 }
 
 static struct {
-    const char *name;
-    void (*func)(ErrorContext *ec, Arena *arena, int argc, const char **argv);
-    const char *short_help;
-    const char *help;
+	const char *name;
+	void (*func)(ErrorContext *ec, Arena *arena, int argc, const char **argv);
+	const char *short_help;
+	const char *help;
 } commands[] = {
-    #define CMD(name, short_help) { #name, cmd_##name, short_help, cmd_##name ##_help },
-    CMD(run, "Run a program with the bytecode interpreter")
-    CMD(bc_compile, "Compile a program to bytecode")
-    CMD(bc_interpret, "Interpret bytecode")
-    CMD(bc_disassemble, "Disassemble bytecode")
-    CMD(bc_dump, "Compile program and print disassembly")
-    CMD(ast_interpret, "Run a program with AST interpreter")
-    CMD(parse, "Parse a source file and print it as AST")
-    CMD(help, "Get help about fml or subcommand")
-    #undef CMD
+	#define CMD(name, short_help) { #name, cmd_##name, short_help, cmd_##name ##_help },
+	CMD(run, "Run a program with the bytecode interpreter")
+	CMD(bc_compile, "Compile a program to bytecode")
+	CMD(bc_interpret, "Interpret bytecode")
+	CMD(bc_disassemble, "Disassemble bytecode")
+	CMD(bc_dump, "Compile program and print disassembly")
+	CMD(ast_interpret, "Run a program with AST interpreter")
+	CMD(parse, "Parse a source file and print it as AST")
+	CMD(help, "Get help about fml or subcommand")
+	#undef CMD
 };
 
 void
