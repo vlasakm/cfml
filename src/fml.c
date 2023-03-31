@@ -1773,10 +1773,6 @@ typedef struct {
 	size_t frame_stack_pos;
 	size_t frame_stack_len;
 	size_t bp;
-
-	// For verification sanity check.
-	size_t fun_stack_start;
-	CFunction *function;
 } VM;
 
 
@@ -1824,10 +1820,6 @@ vm_push(VM *vm, Value value)
 {
 	if (vm->stack_pos + 1 >= vm->stack_len) {
 		exec_error(vm->ec, "Operand stack space exhausted");
-	}
-	if (vm->function && vm->function->max_ostack_height) {
-		// Verification sanity check.
-		assert(vm->stack_pos + 1 - vm->fun_stack_start <= vm->function->max_ostack_height);
 	}
 	vm->stack[++vm->stack_pos] = value;
 }
@@ -1889,12 +1881,6 @@ vm_call_method(VM *vm, u16 function_index, u8 argument_cnt)
 	for (size_t i = argument_cnt; i < local_cnt; i++) {
 		locals[i] = make_null(&vm->heap);
 	}
-
-	// This part is here mainly for sanity checking the verification.
-	size_t saved_fun_stack_start = vm->fun_stack_start;
-	CFunction *saved_function = vm->function;
-	vm->fun_stack_start = vm->stack_pos;
-	vm->function = function;
 
 	for (u8 *ip = function->instruction_start;;) {
 		switch (read_u8(&ip)) {
@@ -2036,10 +2022,6 @@ vm_call_method(VM *vm, u16 function_index, u8 argument_cnt)
 		case OP_RETURN: {
 			vm->frame_stack_pos = vm->bp;
 			vm->bp = saved_bp;
-
-			// For verification sanity check.
-			vm->fun_stack_start = saved_fun_stack_start;
-			vm->function = saved_function;
 			return;
 		}
 		}
