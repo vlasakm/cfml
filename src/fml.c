@@ -1280,6 +1280,9 @@ typedef struct {
 static void
 verify_constant_kind(VerificationState *vs, u16 constant_index, ConstantKind expected_kind)
 {
+	if (constant_index >= vs->program->constant_cnt) {
+		bc_error(vs->ec, "Constant index %"PRIu16" out of bounds, have only %zu constants", constant_index, vs->program->constant_cnt);
+	}
 	u16 actual_kind = vs->program->constants[constant_index].kind;
 	if (vs->program->constants[constant_index].kind != expected_kind) {
 		bc_error(vs->ec, "Expected constant '%"PRIu16"' to be %d, but it is %d", constant_index, expected_kind, actual_kind);
