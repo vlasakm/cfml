@@ -1249,7 +1249,6 @@ typedef struct {
 		bool boolean;
 		i32 integer;
 		Str string;
-		u16 slot;
 		CFunction function;
 		Class class;
 	};
