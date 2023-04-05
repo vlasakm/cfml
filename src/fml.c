@@ -1319,9 +1319,8 @@ verify_function(VerificationState *vs, CFunction *function)
 	Program *program = vs->program;
 	size_t local_cnt = function->parameter_cnt + function->local_cnt;
 	size_t instruction_len = function->instruction_len;
-	u8 *start = arena_alloc(vs->arena, instruction_len);
-	memcpy(start, function->instruction_start, instruction_len);
-	u8  *end = start + instruction_len;
+	u8 *start = function->instruction_start;
+	u8 *end = start + instruction_len;
 
 	Instruction *insts = arena_alloc(vs->arena, instruction_len * sizeof(insts[0]));
 	u32 *instruction_starts = arena_alloc(vs->arena, (instruction_len + 1) * sizeof(instruction_starts[0]));
