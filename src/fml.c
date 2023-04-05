@@ -1625,11 +1625,6 @@ verify_function(VerificationState *vs, CFunction *function)
 		prev_stack_heights_out = tmp;
 	}
 
-	// All functions have to push at least the return value.
-	if (function->max_ostack_height == 0) {
-		bc_error(vs->ec, "Function doesn't push anything to the operand stack");
-	}
-
 	// Sanity check, there shouldn't be a bottom by now.
 	for (size_t i = 0; i < block_cnt; i++) {
 		assert(stack_heights_out[i] != UINT8_MAX);
