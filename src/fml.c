@@ -1325,6 +1325,8 @@ verify_function(VerificationState *vs, CFunction *function)
 	Instruction *insts = arena_alloc(vs->arena, instruction_len * sizeof(insts[0]));
 	u32 *instruction_starts = arena_alloc(vs->arena, (instruction_len + 1) * sizeof(instruction_starts[0]));
 
+	bool seen_return = false;
+
 	// Pass 1: Calculate the number of instructions as well as their
 	// positions in the bytecode. Also verify some immediate arguments to
 	// constants - i.e. that indices into local frame and correct kinds of
@@ -1409,7 +1411,9 @@ verify_function(VerificationState *vs, CFunction *function)
 			break;
 		}
 		case OP_DROP:
+			break;
 		case OP_RETURN:
+			seen_return = true;
 			break;
 		default: {
 			bc_error(vs->ec, "Unknown opcode 0x%02zx", (size_t) ip[-1]);
@@ -1426,7 +1430,11 @@ verify_function(VerificationState *vs, CFunction *function)
 		break;
 	default:
 		bc_error(vs->ec, "Bytecode doesn't end with return or jump");
+	}
 
+
+	if (!seen_return) {
+		bc_error(vs->ec, "Bytecode doesn't have any OP_RETURN");
 	}
 
 	size_t instruction_cnt_max = UINT16_MAX;
