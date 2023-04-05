@@ -1403,11 +1403,28 @@ verify_function(VerificationState *vs, CFunction *function)
 			inst->arg_cnt = read_u8(&ip);
 			break;
 		}
-		case OP_CALL_METHOD:
+		case OP_CALL_METHOD: {
+			inst->index = read_u16(&ip);
+			inst->arg_cnt = read_u8(&ip);
+			verify_constant_kind(vs, inst->index, CK_STRING);
+			break;
+		}
 		case OP_PRINT: {
 			inst->index = read_u16(&ip);
 			inst->arg_cnt = read_u8(&ip);
 			verify_constant_kind(vs, inst->index, CK_STRING);
+
+			Str format = program->constants[inst->index].string;
+			size_t placeholder_cnt = 0;
+			for (size_t i = 0; i < format.len; i++) {
+				switch (format.str[i]) {
+				case '\\': i++; continue;
+				case '~': placeholder_cnt += 1;
+				}
+			}
+			if (placeholder_cnt != inst->arg_cnt) {
+				bc_error(vs->ec, "Invalid number of print arguments: %zu expected, got %zu", placeholder_cnt, (size_t) inst->arg_cnt);
+			}
 			break;
 		}
 		case OP_DROP:
