@@ -1610,6 +1610,15 @@ verify_function(VerificationState *vs, CFunction *function)
 				}
 			}
 			stack_heights_out[b] = height;
+			// Above analysis ensures that for OP_RETURN there is
+			// _at least_ one value on the stack (by conceptually
+			// making it pop and push one value and forbidding
+			// the stack height to go below 0), but we also check
+			// whether the outgoing height is is indeed 1 (i.e.
+			// there aren't more values).
+			if (insts[block_end - 1].op == OP_RETURN && height != 1) {
+				bc_error(vs->ec, "Stack height %zu at OP_RETURN, expected 1", (size_t) height);
+			}
 		}
 		u8 *tmp = stack_heights_out;
 		stack_heights_out = prev_stack_heights_out;
