@@ -5,6 +5,7 @@ test:
     - meson setup build -D b_sanitize=address,undefined
     - meson compile -C build
     - cppcheck --error-exitcode=1 src/*.c
+    - export ASAN_OPTIONS=symbolize=1:debug=1:detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1
     - export FML="$(readlink -f ./build/fml)"
     #- export FML_REF=/cfml/fml
     - /FMLtest/suite all
