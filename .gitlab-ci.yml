@@ -2,7 +2,9 @@ image: $CI_REGISTRY/vlasami6/fmltest:master
 
 test:
   script:
-    - meson setup build
+    - meson setup build -D b_sanitize=address,undefined
     - meson compile -C build
     - cppcheck --error-exitcode=1 src/*.c
-    - env FML="$(readlink -f ./build/fml)" /FMLtest/suite all
+    - export FML="$(readlink -f ./build/fml)"
+    #- export FML_REF=/cfml/fml
+    - /FMLtest/suite all
