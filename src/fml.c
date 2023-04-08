@@ -1750,6 +1750,7 @@ read_constant(ErrorContext *ec, u8 **input, Constant *constant)
 		*input += constant->string.len;
 		break;
 	case CK_FUNCTION:
+		constant->function = (CFunction) {0};
 		constant->function.parameter_cnt = read_u8(input);
 		constant->function.local_cnt = read_u16(input);
 		constant->function.instruction_len = read_u32(input);
@@ -1778,7 +1779,7 @@ read_program(ErrorContext *ec, Arena *arena, Program *program, u8 *input, size_t
 	}
 	input += sizeof(FML_MAGIC);
 	program->constant_cnt = read_u16(&input);
-	program->constants = arena_alloc(arena, program->constant_cnt * sizeof(*program->constants));
+	program->constants = arena_alloc(arena, program->constant_cnt * sizeof(program->constants[0]));
 	for (size_t i = 0; i < program->constant_cnt; i++) {
 		read_constant(ec, &input, &program->constants[i]);
 	}
