@@ -249,7 +249,7 @@ static void
 heap_init(Heap *heap, ErrorContext *ec, void (*gc_func)(Heap *heap), size_t size, FILE *log)
 {
 	if (size == 0) {
-		size = 1024;
+		size = 1280;
 	}
 	// MiB
 	size = size * 1024 * 1024;
