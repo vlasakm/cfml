@@ -1849,7 +1849,7 @@ vm_pop_n(VM *vm, size_t n)
 static void
 vm_push(VM *vm, Value value)
 {
-	if (vm->stack_pos + 1 >= vm->stack_len) {
+	if (vm->stack_pos == vm->stack_len) {
 		exec_error(vm->ec, "Operand stack space exhausted");
 	}
 	vm->stack[++vm->stack_pos] = value;
