@@ -572,7 +572,7 @@ value_as_size(ErrorContext *ec, Value value)
 	}
 	i32 int_index = value_as_integer(value);
 	if (int_index < 0) {
-		exec_error(ec, "Value is negataive");
+		exec_error(ec, "Value is negative");
 	}
 	return (size_t) int_index;
 }
