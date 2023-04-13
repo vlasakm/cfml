@@ -17,7 +17,7 @@
 // See the bottom of this file for parser API.
 
 // This header mainly defines the AST emitted by the reference FML parser and
-// a few utility types.
+// a few utility types and functions.
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -46,8 +46,25 @@ bool str_eq(Str a, Str b);
 //  - a positive number if the first string is greater than the second
 int str_cmp(Str a, Str b);
 
-// Get current time and save it into `ts`.
+
+// Get current time and save it into `ts`. Platform details may differ, but
+// `struct timespec` should be at least similar to the following:
+//
+//         struct timespec {
+//                 long long tv_sec; /* seconds */
+//                 long tv_nsec; /* nanoseconds */
+//         }
+//
+// An example of use:
+//
+//         struct timespec ts;
+//         if (!time_get(&ts)) {
+//         	exit(1);
+//         }
+//         printf("%lld%09ld\n", ts.tv_sec, ts.tv_nsec);
+//
 bool time_get(struct timespec *ts);
+
 
 // See https://courses.fit.cvut.cz/NI-RUN/specs/ast.html for details about the
 // AST.
