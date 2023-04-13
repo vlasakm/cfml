@@ -248,7 +248,9 @@ heap_log(Heap *heap, const char *event)
 static void
 heap_init(Heap *heap, ErrorContext *ec, void (*gc_func)(Heap *heap), size_t size, FILE *log)
 {
-	if (size == 0) {
+	// We don't have GC, so we can't really deal with having less amount of
+	// memory, so we set our heap size unconditionally.
+	if (size == 0 || true) {
 		size = 1280;
 	}
 	// MiB
