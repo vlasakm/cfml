@@ -272,6 +272,7 @@ heap_init(Heap *heap, ErrorContext *ec, void (*gc_func)(Heap *heap), size_t size
 void
 heap_destroy(Heap *heap)
 {
+	heap_log(heap, "E");
 	if (heap->log && fclose(heap->log) != 0) {
 		exec_error(heap->ec, "Failed to write to heap log: %s", strerror(errno));
 	}
@@ -288,14 +289,15 @@ heap_alloc(Heap *heap, size_t size)
 {
 	size_t pos = align(heap->pos, 8);
 	if (pos + size > heap->size) {
+		heap_log(heap, "B");
 		heap->gc_func(heap);
+		heap_log(heap, "A");
 		pos = align(heap->pos, 8);
 		if (pos + size > heap->size) {
 			exec_error(heap->ec, "Heap space exhausted");
 		}
 	}
 	heap->pos = pos + size;
-	heap_log(heap, "A");
 	return malloc(size);
 }
 
