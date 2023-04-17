@@ -1511,6 +1511,10 @@ verify_function(VerificationState *vs, CFunction *function)
 	// a dummy "one past end" instruction start
 	garena_push_value(&gblock_starts, u32, instruction_cnt);
 
+	garena_destroy(&gblock_starts);
+	arena_restore(vs->arena, arena_pos);
+	return;
+
 	// Deduplicate and sort block starts.
 	u32 *block_starts = garena_array(&gblock_starts, u32);
 	size_t block_start_cnt = garena_cnt(&gblock_starts, u32);
