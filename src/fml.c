@@ -1487,7 +1487,7 @@ verify_function(VerificationState *vs, CFunction *function)
 				bc_error(vs->ec, "Jump destination is not a start of instruction (destination '%zu', instruction at '%zu')", (size_t) dest, (size_t) instruction_starts[pos]);
 			}
 			// write absolute destination in instruction counts
-			insts->jump_dest = pos;
+			inst->jump_dest = pos;
 			// the jump destination starts a new basic block
 			garena_push_value(&gblock_starts, u32, pos);
 			// since this instruction is a jump/branch then the next
@@ -1510,10 +1510,6 @@ verify_function(VerificationState *vs, CFunction *function)
 	}
 	// a dummy "one past end" instruction start
 	garena_push_value(&gblock_starts, u32, instruction_cnt);
-
-	garena_destroy(&gblock_starts);
-	arena_restore(vs->arena, arena_pos);
-	return;
 
 	// Deduplicate and sort block starts.
 	u32 *block_starts = garena_array(&gblock_starts, u32);
@@ -1545,7 +1541,7 @@ verify_function(VerificationState *vs, CFunction *function)
 		case OP_BRANCH: {
 			u32 dest = inst->jump_dest;
 			size_t pos = 0;
-			while (instruction_starts[block_starts[pos]] < dest) {
+			while (block_starts[pos] < dest) {
 				pos++;
 			}
 			garena_push_value(&gcfg, Edge, ((Edge) { .from = i, .to = pos }));
