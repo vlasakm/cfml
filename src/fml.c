@@ -28,7 +28,7 @@
 	((type *) ((u8 *)(1 ? (member_ptr) : &((type *) 0)->member) - offsetof(type, member)))
 
 #ifdef __GNUC__
-#define printf_attr(n) __attribute__((__format__(__printf__, n, n + 1)))
+#define printf_attr(n) __attribute__((format(printf, n, n + 1)))
 #else
 #define printf_attr(n)
 #endif
