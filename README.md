@@ -236,17 +236,14 @@ Globals: #3="a"
 Take a bytecode file as an argument, and check statically some properties of
 the bytecode.
 
-```
-fml-bc_verify
-Statically verify some bytecode properties
+Statically verify some bytecode properties:
 
-Verify:
  - correct constant kinds are used,
  - jump targets being starts of instructions,
  - operand stack heights being consistent across control flow,
- - used global variable names,
- - and maybe other things.
+ - used global variable names.
 
+```
 USAGE:
     fml bc_verify FILE
 
