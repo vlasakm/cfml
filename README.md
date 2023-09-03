@@ -20,34 +20,6 @@ through
 [FMLtest](https://courses.fit.cvut.cz/NI-RUN/tasks/index.html#template-repository)
 (https://github.com/kondziu/FMLtest).
 
-## Downloading
-
-Clone the repository with git over https:
-
-```
-git clone https://gitlab.fit.cvut.cz/vlasami6/cfml.git
-```
-
-or through ssh:
-
-```
-git clone git@gitlab.fit.cvut.cz:vlasami6/cfml.git
-```
-
-or if you fancy SSH aliases:
-
-```
-# .ssh/config
-Host fitlab
-        HostName gitlab.fit.cvut.cz
-        User git
-```
-
-```
-git clone fitlab:vlasami6/cfml
-```
-
-
 ## Building
 
 `cfml` uses the [Meson](https://mesonbuild.com/) build system. A release build
